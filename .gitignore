@@ -1,6 +1,16 @@
-# 运行 scripts/verify-package.py 会生成 Python 缓存
+# 解释器产物
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# 临时文件
+*.bak
+*.tmp
 # 包内校验时用反斜杠重定向误产生的垃圾文件（重定向一律用正斜杠）
 ....tmp_*

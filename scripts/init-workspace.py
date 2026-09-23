@@ -17,6 +17,11 @@
   2. **不覆盖已有文件**——目的文件已存在且非空时报 FAIL 并跳过，要重建须显式 --force；
   3. **不编造个人事实**——数据层（简历事实、字段取值）含使用者真实信息，本脚本**只建骨架并引导使用者填**，
      绝不生成占位内容冒充数据。
+  4. **数据层只生成一份**（2026-09-23 补）——原先产出「主数据 ＋ 字段映射」两份 JSON 骨架，实测与使用者
+     既有的 .md 数据层并存、构成**双真源**（两份不一致时两边都不会报错）。现改为**一份 Markdown**，
+     同时承载事实／定稿文本与字段取值。
+  5. **投递台账单列生成**（2026-09-23 补）——它是使用者唯一会主动翻的账，原先只当数据层的附属，
+     实测被整个漏掉、直到使用者发问才发现。模板块在手册附录 C，脚本就地抽取。
 
 本脚本只读封装体、只写使用者指定的路径，不改封装体自身。
 """
@@ -84,22 +89,61 @@ def extract_block(manual_text, header_line):
     return manual_text[j + len("```markdown"):k].lstrip("\n")
 
 
+def detect_user_rules():
+    """探测用户级要求文件的位置（§1.1 配置项 2）。
+
+    原先写死 `~/.workbuddy/rules/`——实测该目录在目标机不存在，生成的要求文件里「效力顺序②」
+    于是指向空气，还被误读成"配置漏填"。改为按常见约定逐个探测，全不存在时给出**明确说明**，
+    而不是留一个看着像配置漏填的路径。
+    """
+    home = Path.home()
+    for label, p in [
+        ("~/.codebuddy/rules/", home / ".codebuddy" / "rules"),
+        ("~/.workbuddy/rules/", home / ".workbuddy" / "rules"),
+        ("~/.workbuddy/MEMORY.md", home / ".workbuddy" / "MEMORY.md"),
+        ("~/.codebuddy/CODEBUDDY.md", home / ".codebuddy" / "CODEBUDDY.md"),
+    ]:
+        if p.exists():
+            return label
+    return "无（本机未见用户级要求文件）"
+
+
 def guess_paths(project_dir):
     """按 §1.1 配置表的常见形态猜一组默认路径，供 --plan 展示。"""
     pd = Path(project_dir)
     return {
         "project_requirements": str(pd / "CODEBUDDY.md"),
-        "data_dir": str(pd / "简历信息库"),
+        "data_dir": str(pd),
+        "data_file": str(pd / "简历信息库.md"),
+        "delivery_ledger": str(pd / "投递台账.md"),
         "ledger": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-LEDGER.md"),
         "changelog": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-CHANGELOG.md"),
         "channel_file": str(pd / ".workbuddy" / "skills" / "CHANNEL-qqbrowser.md"),
-        "recipes_dir": str(pd / ".workbuddy" / "skills"),
-        "user_rules_dir": "~/.workbuddy/rules/",
+        "skills_dir": str(pd / ".workbuddy" / "skills"),
+        "recipes_dir": str(ROOT / "recipes"),
+        "user_rules_dir": detect_user_rules(),
     }
+
+
+def _norm(v):
+    """统一成正斜杠——生成的要求文件是给人读的，两种分隔符混用会被当成"哪里配错了"。
+
+    非路径取值（如"无（本机未见用户级要求文件）"）原样返回。
+    """
+    s = str(v)
+    if not s or s.startswith("无（"):
+        return s
+    return s.replace(chr(92), "/")
 
 
 def build_requirements(cfg):
     """把 templates/CODEBUDDY.md 的占位符换成实值。"""
+    c = dict(cfg)
+    for _k in ("project_dir", "data_file", "delivery_ledger", "ledger", "changelog",
+               "channel_file", "skills_dir", "recipes_dir"):
+        if _k in c:
+            c[_k] = _norm(c[_k])
+    cfg = c
     tpl = TEMPLATES / "CODEBUDDY.md"
     if not tpl.is_file():
         fail("缺 templates/CODEBUDDY.md，无法生成项目级要求文件")
@@ -112,9 +156,10 @@ def build_requirements(cfg):
     t = t.replace("__USER_RULES_DIR__", cfg["user_rules_dir"])
     t = t.replace("__CHANNEL_FILE__", cfg["channel_file"])
     t = t.replace("__RECIPES_DIR__", cfg["recipes_dir"])
-    t = t.replace("__PACKAGE_DIR__", str(ROOT))
-    t = t.replace("__DATA_DIR__", cfg["data_dir"])
-    t = t.replace("__SKILLS_DIR__", cfg["recipes_dir"])
+    t = t.replace("__PACKAGE_DIR__", _norm(ROOT))
+    t = t.replace("__DATA_FILE__", cfg["data_file"])
+    t = t.replace("__DELIVERY_LEDGER__", cfg["delivery_ledger"])
+    t = t.replace("__SKILLS_DIR__", cfg["skills_dir"])
     t = t.replace("__LEDGER_FILE__", cfg["ledger"])
     t = t.replace("__CHANGELOG_FILE__", cfg["changelog"])
     t = t.replace("__FORBIDDEN_PATHS__", cfg.get("forbidden") or "无（按目标边界补充）")
@@ -130,41 +175,108 @@ def build_requirements(cfg):
 
 
 def data_skeleton(cfg):
-    """数据层骨架：**只建结构、不填内容**。
+    """数据层骨架：**只建结构、不填内容**，且**只生成一份**（2026-09-23 改）。
 
-    简历事实与字段取值属使用者个人数据，脚本无从生成——这里给出最小合法 JSON 骨架
-    （键名取自本封装体已确认可用的结构），值一律留空/待填，并明确标注。
+    简历事实与字段取值属使用者个人数据，脚本无从生成——这里给出一份 Markdown 骨架，
+    同时承载「主数据」与「字段取值」两种角色。原先拆成两份 JSON，实测与使用者既有的
+    .md 数据层并存、构成双真源，而两份不一致时**两边都不会报错**。
     """
-    resume = {
-        "_说明": "简历事实数据主文件骨架——由封装体初始化脚本生成，**内容须使用者逐项填写**；"
-                 "本文件只存数据本身，不存版本变更历史（手册 §1.1 配置项 4）。",
-        "meta": {"owner": "", "updated": "", "purpose": "简历信息库主数据。"},
-        "basic": {},
-        "contact": {},
-        "education": [],
-        "internships": [],
-        "campus": [],
-        "projects": [],
-        "awards": [],
-        "family": [],
-        "hobbies": "",
-        "self_evaluation": "",
-        "job_reason": "",
-        "求职意向": {},
-        "tags": [],
-    }
-    formmap = {
-        "_说明": "招聘系统字段映射表骨架——key 为中文标准字段名，aliases 为该字段在各类招聘系统里"
-                 "可能出现的标签写法，value 为待填值；null 表示信息库中暂无该数据。"
-                 "操作配方的分层归属见手册 §5.2。",
-        "meta": {"purpose": "招聘系统表单自动填写的字段映射表。", "owner": "", "updated": ""},
-        "fields": [],
-        "section_hints": {},
-        "system_fields": {},
-    }
-    import json
-    return (json.dumps(resume, ensure_ascii=False, indent=2) + "\n",
-            json.dumps(formmap, ensure_ascii=False, indent=2) + "\n")
+    return """# 简历信息库（数据层 · 单文件真源）
+
+> **本文件是取数的唯一真源**——快照、记忆、上一轮读数、页面现状一律不算数（手册 §1.1 配置项 4）。
+> 本文件由封装体初始化脚本生成，**只搭结构、不填内容**：所有取值一律留空，**须使用者逐项填写**。
+> **一个文件兼两职**：简历事实与定稿文本 ＋ 各招聘系统字段取值、附件与照片路径、问卷类取值。
+> **不要拆成两份**——拆开即双真源，而两份不一致时两边都不会报错。
+> **只存数据本身、不存版本变更历史**：changelog／version／更新记录类元信息一律不写入本文件；
+> 填写与投递过程只进投递台账。
+
+## 一、基本信息
+
+| 字段 | 取值 |
+|---|---|
+| 姓名 |  |
+| 性别 |  |
+| 出生日期 |  |
+| 民族 |  |
+| 政治面貌 |  |
+| 籍贯 |  |
+| 户籍所在地 |  |
+| 证件类型／号码 |  |
+
+## 二、联系方式
+
+| 字段 | 取值 |
+|---|---|
+| 手机 |  |
+| 邮箱 |  |
+| 通讯地址 |  |
+| 紧急联系人／电话 |  |
+
+## 三、教育背景
+
+| 起止年月 | 学校 | 学院／系 | 专业 | 学历 | 学位 | GPA／排名 | 是否最高学历 |
+|---|---|---|---|---|---|---|---|
+|  |  |  |  |  |  |  |  |
+
+## 四、实习经历
+
+| 起止年月 | 公司全称 | 部门 | 职位 | 工作描述（编号分行） | 使用技能 |
+|---|---|---|---|---|---|
+|  |  |  |  |  |  |
+
+## 五、校园工作经历
+
+| 起止年月 | 组织 | 职务 | 描述 |
+|---|---|---|---|
+|  |  |  |  |
+
+## 六、项目经历
+
+| 起止年月 | 项目名称 | 角色 | 描述 |
+|---|---|---|---|
+|  |  |  |  |
+
+## 七、荣誉奖项
+
+| 时间 | 奖项名称 | 级别 | 备注 |
+|---|---|---|---|
+|  |  |  |  |
+
+## 八、技能与证书
+
+| 类别 | 名称 | 水平／成绩 | 取得时间 |
+|---|---|---|---|
+|  |  |  |  |
+
+## 九、语言能力
+
+| 语种 | 读／写 | 听／说 | 考试与成绩 |
+|---|---|---|---|
+|  |  |  |  |
+
+## 十、自我评价与求职意向
+
+- 自我评价（定稿文本；若按表单字数上限备多版，各版都写在这里并标字数）：
+- 求职意向（岗位／城市／是否服从调剂）：
+
+## 十一、成绩明细
+
+（核心课程与成绩；口径与使用规则一并写在这里）
+
+## 十二、填表口径与附件路径
+
+- 附件与照片的**绝对路径**（简历、证件照、成绩单、获奖证明……）：
+- 各系统专属口径（某字段该写成什么样）：
+
+## 十三、待补事项
+
+（库内暂无、需使用者确认的数据；确认后回填上面各节）
+
+## 字段取值的写法约定
+
+- 取值直接写在各节表格的「取值」列。
+- 需要按招聘系统区分写法时，在该节下另起一条「〈系统名〉：……」，**不要新建文件**。
+"""
 
 
 def main():
@@ -200,7 +312,13 @@ def main():
     cfg["project_dir"] = project_dir or os.getcwd()
     cfg["ledger"] = opt("--ledger", cfg["ledger"])
     cfg["changelog"] = opt("--changelog", cfg["changelog"])
-    cfg["data_dir"] = opt("--data-dir", cfg["data_dir"])
+    if "--data-dir" in argv:
+        _d = opt("--data-dir")
+        cfg["data_dir"] = _d
+        cfg["data_file"] = os.path.join(_d, "简历信息库.md")
+        cfg["delivery_ledger"] = os.path.join(_d, "投递台账.md")
+    cfg["data_file"] = opt("--data-file", cfg["data_file"])
+    cfg["delivery_ledger"] = opt("--delivery-ledger", cfg["delivery_ledger"])
     cfg["channel_file"] = opt("--channel", cfg["channel_file"])
     cfg["recipes_dir"] = opt("--recipes-dir", cfg["recipes_dir"])
     cfg["user_rules_dir"] = opt("--user-rules", cfg["user_rules_dir"])
@@ -212,8 +330,8 @@ def main():
     # ── 体检：五类必须存在的产物 ＋ 一项可选项 ──────────────────────────
     checks = [
         ("项目级要求文件（环境启动时自动注入，必须落在项目根）", cfg["project_dir"] + "/CODEBUDDY.md"),
-        ("数据层·主数据", os.path.join(cfg["data_dir"], "resume.json")),
-        ("数据层·字段映射", os.path.join(cfg["data_dir"], "表单字段映射.json")),
+        ("数据层（**单文件真源**，配置项 4 点名的那个）", cfg["data_file"]),
+        ("**投递台账**（使用者唯一会主动翻的账）", cfg["delivery_ledger"]),
         ("证据台账", cfg["ledger"]),
         ("变更档案", cfg["changelog"]),
     ]
@@ -237,11 +355,11 @@ def main():
         print()
         print("可机械生成（脚本直接产出）：")
         print("  · 项目级要求文件 ← templates/CODEBUDDY.md（占位符按 §1.1 配置表替换）")
-        print("  · 证据台账／变更档案 ← 手册 §5.1 模板块（**唯一真源**，脚本就地抽取，不另存副本）")
-        print("  · 数据层骨架 ← 仅结构、值为空，**须使用者填**")
+        print("  · 证据台账／变更档案／投递台账 ← 手册附录 A／B／C 模板块（**唯一真源**，脚本就地抽取，不另存副本）")
+        print("  · 数据层骨架 ← **一份** Markdown、仅结构、值为空，**须使用者填**")
         print()
         print("必须使用者提供（脚本不代填、不编造）：")
-        print("  · 简历事实与字段取值（填入数据层两份文件）")
+        print("  · 简历事实与字段取值（填入数据层那一份文件）")
         print("  · §1.1 配置项 7 禁止触碰清单、配置项 8 浏览器启动方式")
         print()
         print("下一步：python scripts/init-workspace.py --yes --project \"%s\"" % cfg["project_dir"])
@@ -274,20 +392,19 @@ def main():
     if text is not None:
         write_if_absent(cfg["project_dir"] + "/CODEBUDDY.md", text, force)
 
-    led_tpl = extract_block(manual, "**台账模板**")
-    chg_tpl = extract_block(manual, "**变更档案模板**")
-    if led_tpl is None:
-        fail("未能从手册 §5.1 抽取台账模板（模板块标题或围栏格式变了？）")
-    else:
-        write_if_absent(cfg["ledger"], led_tpl, force)
-    if chg_tpl is None:
-        fail("未能从手册 §5.1 抽取变更档案模板（模板块标题或围栏格式变了？）")
-    else:
-        write_if_absent(cfg["changelog"], chg_tpl, force)
+    # 三个台账类文件同源同路：模板块都在手册附录（A 台账／B 变更档案／C 投递台账），就地抽取、不另存副本。
+    for key, header, label in [
+        ("ledger", "**台账模板**", "台账"),
+        ("changelog", "**变更档案模板**", "变更档案"),
+        ("delivery_ledger", "**投递台账模板**", "投递台账"),
+    ]:
+        blk = extract_block(manual, header)
+        if blk is None:
+            fail("未能从手册附录抽取%s模板（模板块标题或围栏格式变了？）" % label)
+        else:
+            write_if_absent(cfg[key], blk, force)
 
-    rj, fm = data_skeleton(cfg)
-    write_if_absent(os.path.join(cfg["data_dir"], "resume.json"), rj, force)
-    write_if_absent(os.path.join(cfg["data_dir"], "表单字段映射.json"), fm, force)
+    write_if_absent(cfg["data_file"], data_skeleton(cfg), force)
 
     # 通道文件的可选性由上方 optional 清单承载（只报状态、不计退出码），此处不重复检查。
 
@@ -304,14 +421,18 @@ def main():
     print("生成 %d 项 / WARN %d / FAIL %d" % (len(done), len(warns), len(fails)))
     print()
     print("**接下来必须由使用者完成的**（脚本不代填、不编造）：")
-    print("  1. 打开 %s/CODEBUDDY.md 核对 §〇.5 禁止触碰清单，以及 §〇.1／§一 的数据层路径、"
-          "卷首效力顺序与 §五／§六 的通道文件路径" % cfg["project_dir"])
-    print("  2. 把简历事实与字段取值逐项填入数据层（%s）—— 这是取数的唯一真源" % cfg["data_dir"])
+    print("  1. 打开 %s/CODEBUDDY.md 核对 §〇.5 禁止触碰清单，以及 §〇.1／§一 的数据层**单文件**路径、"
+          "投递台账路径、卷首效力顺序与 §五／§六 的通道文件路径" % cfg["project_dir"])
+    print("  2. 把简历事实与字段取值逐项填入数据层（%s）—— 这是取数的唯一真源" % cfg["data_file"])
     print("  3. 按手册 §1.1 配置项 8 制备浏览器启动器（可用 scripts/launch-browser.bat 模板）")
-    print("  4. 复制 recipes/ 下配方到环境侧配方目录 %s（此后它是唯一活跃源头）" % cfg["recipes_dir"])
-    print("  5. 跑一次 %s 确认包自洽（退出码 0）" % (ROOT / "scripts" / "verify-package.py"))
-    print("  6. 此后每次任务收尾，用同一支脚本带 --ledger 指向本环境台账（%s）跑**运行态**校验"
-          "（第十段：轮次基准／待验表／到期／池量／登记簿对账）" % cfg["ledger"])
+    print("  4. 配方取用**二选一**（手册 §1.5 步骤四）：默认**就地引用**包内 recipes/"
+          "（多数环境已把它注册成技能，直接可用）；仅当包不在技能扫描路径内，才复制到 %s。"
+          "**同一环境同名配方只能存在一份**" % cfg["recipes_dir"])
+    print("  5. 跑一次 %s --package 确认包自洽（封装体档·九段，退出码 0）"
+          % (ROOT / "scripts" / "verify-package.py"))
+    print("  6. 此后每次任务收尾，用同一支脚本带 --ledger 指向本环境台账（%s）跑**每轮档**"
+          "（默认：运行态第十段＋模板自证）；改过手册／配方／脚本／模板时再加 --package"
+          % cfg["ledger"])
     print("  7. （可选）若本环境要有独立通道文件（%s），按 §1.1 配置项 3 自行落盘；"
           "没有则由本手册 §三 独立生效" % cfg["channel_file"])
     print("退出码：%d" % (1 if fails else 0))

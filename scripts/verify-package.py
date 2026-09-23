@@ -2,11 +2,16 @@
 # -*- coding: utf-8 -*-
 """封装体机械校验（交付前 / 手册改动后必跑）。
 
-用法：
-  python scripts/verify-package.py                      # 包自洽九段
-  python scripts/verify-package.py --ledger <台账.md>   # 追加第十段：运行态台账校验
+用法（两档，2026-09-23 起）：
+  python scripts/verify-package.py                      # 【每轮档·默认】运行态第十段 ＋ 模板自证
+  python scripts/verify-package.py --ledger <台账.md>   # 同上；指定台账（不指定则自动探测）
+  python scripts/verify-package.py --package            # 【封装体档】九段全跑；改过封装体才需要
   python scripts/verify-package.py --apply <投递.xlsx>  # 第十段里对账轮锚（可省，自动找）
 退出码：0 = 全绿；1 = 有 FAIL（先修结构再收工）。
+为什么分两档：九段里有 7 段查的是「封装体自身是否自洽」（维护者项），对「这次填报对不对」
+零贡献。每轮收尾只跑运行态（第十段）＋ 模板自证（生成物质量），改过封装体时再加跑九段。
+第十段按台账声明的**档位**（§5.1：轻量／完整，未声明＝完整）决定检查面：轻量档不要求待验表
+存在、不判到期与池量；完整档下若连续 3 个已复核轮事件流无新增行，另给一条「机制是否过重」WARN。
 
 包自洽九段：①手册一级章节齐全 ②frontmatter 完整且版本号唯一
 ③配方索引 ↔ 磁盘双向一致 ＋ 配方内点名的随包脚本 ↔ 磁盘 ＋ 占位符声明 ↔ 脚本实际
@@ -63,6 +68,8 @@ MECH = {
 # 部署者自建本机名单：scripts/verify-deny.txt（一行一词，不随包），或用 --deny 追加。
 DENY_FILE = ROOT / "scripts" / "verify-deny.txt"
 SELF = Path(__file__).resolve()
+# 档位（2026-09-23 补）：默认只跑「每轮档」= 运行态第十段 ＋ 模板自证；--package 才跑九段全量。
+FULL_MODE = "--package" in sys.argv
 
 fails, warns = [], []
 
@@ -576,10 +583,47 @@ def _pend_key(cell):
     return t[:24]
 
 
+def ledger_tier(text):
+    """台账档位（§5.1 档位段，2026-09-23）：读「计数与口径」段首的 `**档位**：轻量|完整`。
+    未声明即按**完整档**——向后兼容 2026-09-23 之前生成的台账。"""
+    m = re.search(r"\*\*档位\*\*\s*[:：]\s*(轻量|完整)", text)
+    return m.group(1) if m else "完整"
+
+
+def _mech_weight_hint(s, rounds):
+    """运行证据门槛（§5.1，T2-3）：完整档下连续 ≥3 个已复核轮内事件流无新增行 →
+    提示复核机制是否过重。**只提示（WARN），降档与否由使用者定。**"""
+    if len(rounds) < 3:
+        return []
+    dates = {}
+    for m in re.finditer(r"\br(\d+)\b[^\n]{0,8}?(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s):
+        dates[int(m.group(1))] = "%04d-%02d-%02d" % (
+            int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    anchor = dates.get(sorted(rounds)[-3])
+    if not anchor:
+        return []
+    ev = []
+    es = re.search(r"^#{2,4}\s*事件流[^\n]*\n(.*?)(?=^#{1,4}\s|\Z)", s, re.M | re.S)
+    if es:
+        for l in es.group(1).split("\n"):
+            m = re.match(r"^\|\s*(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", l)
+            if m:
+                ev.append("%04d-%02d-%02d" % (int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    if ev and max(ev) >= anchor:
+        return []
+    warn(10, "完整档已连续 ≥3 轮（r%s 起）事件流无新增行——按 §5.1 运行证据门槛复核机制是否过重："
+             "降为轻量档，或在该轮结论里写明为何仍需保留" % sorted(rounds)[-3])
+    return ["机制运行证据：连续 ≥3 轮无事件（触发一次「是否过重」复核，提示非阻断）"]
+
+
 def check_ledger(led, apply_xlsx):
     """第十段：运行态台账校验。返回打印用信息行。"""
     s = read_utf8(led)
     info = ["台账：%s" % led]
+    tier = ledger_tier(s)
+    light = (tier == "轻量")
+    info.append("档位：%s%s" % (tier, "（轻量档：待验池／到期／池量／休眠／折叠不强制）"
+                              if light else "（完整档：全机制）"))
     # 台账是运行态文件、不在包里，第 9 段的扫描扫不到它；这里补一次表格结构检查
     # （2026-09-17 事故：账本待验表 6 列表头配 4 格分隔行，渲染器整块不成表，两套脚本都没拦住）。
     check_md_tables(s, os.path.basename(led), 10)
@@ -633,8 +677,13 @@ def check_ledger(led, apply_xlsx):
                if re.match(r"^\|\s*条目\s*\|\s*域\s*\|\s*登记轮", l)), None)
     due, rep = [], []
     if hi is None:
-        fail(10, "找不到待验表头（应为「| %s |」）" % " | ".join(MECH["pend_head"]))
-        rows = 0
+        if light:
+            # 轻量档（§5.1 默认）不维护待验池：可整节留空或不建，不报错
+            info.append("待验表：轻量档未启用（可整节留空／不建）——跳过结构、到期与池量检查")
+            rows = 0
+        else:
+            fail(10, "找不到待验表头（应为「| %s |」）" % " | ".join(MECH["pend_head"]))
+            rows = 0
     else:
         rows, bad = 0, 0
         cur = max(rounds) if rounds else 0
@@ -698,24 +747,28 @@ def check_ledger(led, apply_xlsx):
         info.append("待验表：%d 行（表头 %d 格），结构异常 %d" % (rows, MECH["pend_cols"], bad))
         thtxt = "流程域 %d／框架域 %d／系统域 %d" % (
             MECH["th"]["流程域"], MECH["th"]["框架域"], MECH["th"]["系统域"])
-        if due:
-            fail(10, "到期 %d 行未处置（域阈值 %s；固化＝已达门槛者豁免）——机制判定该条已失效、"
-                     "留着即闭环停摆：%s"
-                 % (len(due), thtxt, "；".join(d[0] for d in due[:6])))
-            for lb, dm, rg, idl, rl, t, rt in due[:6]:
-                info.append("   · 对账提示 %s（%s 登记%s 空转%d 阈值%d）｜%s"
-                            % (lb, dm, rg, idl, t, reconcile_hint(rt, led)))
-            info.append("   · 处置：已收录的记「清出（已入册）」，未收录且未固化才降级入休眠区（非删除）")
+        if light:
+            # 轻量档不维护待验池：结构已查，到期与池量的语义不判（属完整档）
+            info.append("轻量档：到期与池量不判（属完整档）；如需启用，把台账「档位」行改回「完整」")
         else:
-            info.append("到期（域阈值 %s）：0 行" % thtxt)
-        if rep:
-            fail(10, "反复不复现型 %d 行未处置（关联 ≥2 且 空转 ≥ 域阈值 且 未固化 → 降级入休眠区并标"
-                     "「反复不复现」、不再唤醒；不受固化豁免保护）：%s"
-                 % (len(rep), "；".join(r[0] for r in rep[:6])))
-        if rows > MECH["pool_cap"]:
-            warn(10, "待验池 %d 行 > %d：触发降级入休眠区（归档而非删除；本轮该域出现的行跳过）"
-                 % (rows, MECH["pool_cap"]))
-        info.append("池量：%d 行（上限 %d）" % (rows, MECH["pool_cap"]))
+            if due:
+                fail(10, "到期 %d 行未处置（域阈值 %s；固化＝已达门槛者豁免）——机制判定该条已失效、"
+                         "留着即闭环停摆：%s"
+                     % (len(due), thtxt, "；".join(d[0] for d in due[:6])))
+                for lb, dm, rg, idl, rl, t, rt in due[:6]:
+                    info.append("   · 对账提示 %s（%s 登记%s 空转%d 阈值%d）｜%s"
+                                % (lb, dm, rg, idl, t, reconcile_hint(rt, led)))
+                info.append("   · 处置：已收录的记「清出（已入册）」，未收录且未固化才降级入休眠区（非删除）")
+            else:
+                info.append("到期（域阈值 %s）：0 行" % thtxt)
+            if rep:
+                fail(10, "反复不复现型 %d 行未处置（关联 ≥2 且 空转 ≥ 域阈值 且 未固化 → 降级入休眠区并标"
+                         "「反复不复现」、不再唤醒；不受固化豁免保护）：%s"
+                     % (len(rep), "；".join(r[0] for r in rep[:6])))
+            if rows > MECH["pool_cap"]:
+                warn(10, "待验池 %d 行 > %d：触发降级入休眠区（归档而非删除；本轮该域出现的行跳过）"
+                     % (rows, MECH["pool_cap"]))
+            info.append("池量：%d 行（上限 %d）" % (rows, MECH["pool_cap"]))
 
     # 投递记录对账
     if apply_xlsx is None:
@@ -736,6 +789,8 @@ def check_ledger(led, apply_xlsx):
                 mx, len(seqs), len(anchor_seqs & set(seqs)), len(unreviewed),
                 ("[" + ", ".join(str(x) for x in unreviewed[:8]) + ("…" if len(unreviewed) > 8 else "") + "]") if unreviewed else ""))
     info.extend(check_registry(led))
+    if not light:
+        info.extend(_mech_weight_hint(s, rounds))
     return info
 
 
@@ -754,318 +809,329 @@ def main():
         return 1
     sk = read_utf8(MANUAL)
 
-    # ① 一级章节齐全
-    for cn in ["一", "二", "三", "四", "五", "六"]:
-        if not re.search(r"^##\s+%s、" % cn, sk, re.M):
-            fail(1, "手册缺一级章节 ## %s、" % cn)
-
-    # ② frontmatter
-    m = re.match(r"^---\s*\n(.*?)\n---\s*\n", sk, re.S)
-    if not m:
-        fail(2, "手册缺 frontmatter")
-        fm = ""
-    else:
-        fm = m.group(1)
-        for k in ["name", "description", "version", "updated"]:
-            if not re.search(r"^%s:" % k, fm, re.M):
-                fail(2, "手册 frontmatter 缺 %s" % k)
-        vm = re.search(r"^version:\s*(\S+)", fm, re.M)
-        if vm:
-            ver = vm.group(1)
-            n = len(re.findall(re.escape(ver), sk))
-            if n > 1:
-                fail(2, "版本号 %s 在手册内出现 %d 次（应只在 frontmatter 一处）" % (ver, n))
-            if not re.match(r"^v\d+\.\d+", ver):
-                fail(2, "版本号格式异常：%s" % ver)
-
-    # ③ 配方索引 ↔ 磁盘双向一致
+    # 文件清单与配方目录：两档都要（输出计数与「模板自证」都用）——原先在 ⑦⑧ 里算，每轮档取不到
+    all_files = []
+    for dp, dn, fn in os.walk(str(ROOT)):
+        # `__pycache__`＝解释器字节码缓存；`.git`／`.svn`／`.hg`＝版本控制元数据。两类都不是交付物：
+        # 当文本读会报「编码无法解析」，命中词表也毫无意义（git 对象是压缩二进制）。
+        # 2026-09-23 实测：包目录建仓（.git 出现）后，封装体档从 FAIL 0 变 FAIL 50，全是这两类误报。
+        dn[:] = [d for d in dn if d not in ("__pycache__", ".git", ".svn", ".hg")]
+        for f in fn:
+            all_files.append(Path(dp) / f)
     disk = recipe_dirs()
-    idx = set(re.findall(r"^\|\s*`([a-z0-9\-]+-autofill)`\s*\|", sk, re.M))
-    for name in sorted(idx - set(disk)):
-        fail(3, "§4.7 索引列了 `%s`，磁盘上不存在" % name)
-    for name in sorted(set(disk) - idx):
-        fail(3, "磁盘上有 `%s`，§4.7 索引未收录" % name)
 
-    # ③附一 手册正文里所有 `recipes/<名>` 指针都要落在磁盘上（2026-09-18 补）
-    # 栅栏测试实证：索引表是双向查的，但**判据表**（侦察时读的那张）里的
-    # `→ recipes/xxx` 指针没人查——把 webform-autofill 改成 nonexistent-fw-autofill，
-    # 退出码仍是 0。侦察时拿到一个不存在的配方名＝当场走进死路，且无人发现。
-    refs = set(re.findall(r"recipes/([a-z0-9\-]+)", sk))
-    for name in sorted(refs - set(disk)):
-        fail(3, "手册正文引用了 `recipes/%s`，磁盘上不存在" % name)
+    if FULL_MODE:
+    # ①–⑨ 属「封装体档」：九段里 7 段是维护者项，每轮跑等于把成本压在维护面上
+        # ① 一级章节齐全
+        for cn in ["一", "二", "三", "四", "五", "六"]:
+            if not re.search(r"^##\s+%s、" % cn, sk, re.M):
+                fail(1, "手册缺一级章节 ## %s、" % cn)
 
-    # ③附 配方内以表格点名的随包脚本 ↔ 磁盘（＋ 占位符声明 ↔ 脚本实际）
-    # 2026-09-17 补：原来只查 §4.7 索引 ↔ recipes/ 目录，配方**内部**写明的脚本清单没人查；
-    # 而清单写错/脚本改名会让按配方操作的人拿到 FileNotFoundError，且任何校验器都不会报。
-    for name in disk:
-        sd = RECIPES / name / "scripts"
-        rf = RECIPES / name / "SKILL.md"
-        if not sd.is_dir() or not rf.is_file():
-            continue
-        files = sorted(p.name for p in sd.iterdir() if p.is_file())
-        rs = read_utf8(rf)
-        declared = {}
-        for m in re.finditer(r"^\|\s*`([A-Za-z0-9_.\-]+\.(?:js|py))`\s*\|([^\n]*)", rs, re.M):
-            declared[m.group(1)] = m.group(2)
-        for fn, cells in declared.items():
-            if fn not in files:
-                fail(3, "配方 `%s` 点名了 scripts/%s，磁盘上不存在" % (name, fn))
-            elif fn.endswith(".js"):
-                dph = set(re.findall(r"\{\{(\w+)\}\}", cells))
-                real = set(re.findall(r"\{\{(\w+)\}\}", read_utf8(sd / fn)))
-                if dph != real:
-                    fail(3, "配方 `%s` 的 scripts/%s 占位符声明 %s ≠ 脚本实际 %s"
-                         % (name, fn, sorted(dph) or "—", sorted(real) or "—"))
-        for fn in files:
-            if fn.endswith(".js") and fn not in declared:
-                warn(3, "配方 `%s` 的 scripts/%s 未在配方内点名（文档可能漏写）" % (name, fn))
-
-    # ④ 配方 frontmatter
-    for name in disk:
-        f = RECIPES / name / "SKILL.md"
-        if not f.is_file():
-            fail(4, "配方 `%s` 缺 SKILL.md" % name)
-            continue
-        s = read_utf8(f)
-        mm = re.match(r"^---\s*\n(.*?)\n---\s*\n", s, re.S)
-        if not mm:
-            fail(4, "配方 `%s` 缺 frontmatter" % name)
-            continue
-        for k in ["name", "description"]:
-            if not re.search(r"^%s:" % k, mm.group(1), re.M):
-                fail(4, "配方 `%s` frontmatter 缺 %s" % (name, k))
-        nm = re.search(r"^name:\s*(\S+)", mm.group(1), re.M)
-        if nm and nm.group(1) != name:
-            fail(4, "配方 `%s` 的 frontmatter name=%s 与目录名不一致" % (name, nm.group(1)))
-
-    # ⑤ 启动器模板
-    if not BAT.is_file():
-        fail(5, "缺 scripts/launch-browser.bat")
-    else:
-        b = read_text(BAT)
-        if b is None:
-            fail(5, "launch-browser.bat 既非 UTF-8 也非 GBK")
+        # ② frontmatter
+        m = re.match(r"^---\s*\n(.*?)\n---\s*\n", sk, re.S)
+        if not m:
+            fail(2, "手册缺 frontmatter")
+            fm = ""
         else:
-            for ph in ["__CLI__", "__BROWSER__", "__URL__", "__LOG__"]:
-                if b.count(ph) < 2:
-                    warn(5, "启动器占位符 %s 出现次数 <2（可能已被替换为实值）" % ph)
-            # 护栏与扩展参数只看**有效指令行**：注释（REM／::）里的同名串不算数。
-            # 2026-09-17 栅栏测试：保留注释、删掉真实启动行上的参数 → 原判据仍报 OK（假绿）。
-            code_lines = [l for l in b.splitlines()
-                          if l.strip() and not l.strip().upper().startswith("REM")
-                          and not l.strip().startswith("::")]
-            code = "\n".join(code_lines)
-            # 2026-09-19 加固：原判据等价于「`:NOCONFIG` 与 `exit /b 1` 两个字样出现过」，
-            # 与「护栏真的拦得住」不等价——栅栏测试实测 4 种改写假绿：删掉四条跳转判断只留标签、
-            # 四条全改注释、跳转目标改名、掏空分支实体（字样仍留在标签上）。
-            # 改判**控制流可达**：须存在指向该标签的条件跳转指令行 ＋ 该标签行 ＋ 标签段内的 exit /b 1。
-            jumps = [l for l in code_lines
-                     if re.match(r"^\s*if\b.*\bgoto\s+:?NOCONFIG\b", l, re.I)]
-            lab = next((i for i, l in enumerate(code_lines)
-                        if re.match(r"^\s*:NOCONFIG\b", l, re.I)), None)
-            if not jumps or lab is None:
-                fail(5, "启动器缺「占位符未替换即中止」护栏：须同时存在指向 `:NOCONFIG` 的条件跳转指令行"
-                        "与标签行（有效指令行内；只剩字样不算）")
-            else:
-                tail = []
-                for l in code_lines[lab:]:
-                    if re.match(r"^\s*:\w+", l) and not re.match(r"^\s*:NOCONFIG\b", l, re.I):
-                        break
-                    tail.append(l)
-                if not re.search(r"\bexit\s+/b\s+1\b", "\n".join(tail), re.I):
-                    fail(5, "启动器 `:NOCONFIG` 段内无 `exit /b 1`（中止后未返回失败码）")
-            sets = dict(re.findall(r'set\s+"(\w+)=(__\w+__)"', code, re.I))
-            guarded = set()
-            for l in jumps:
-                mg = re.match(r'^\s*if\s+"%(\w+)%"\s*==\s*"(__\w+__)"', l, re.I)
-                if mg:
-                    guarded.add(mg.group(1))
-            miss = sorted(set(sets) - guarded)
-            if miss:
-                warn(5, "启动器护栏未覆盖全部未替换占位符：%s" % "、".join(miss))
-            if "--display-invisible-extension=true" not in code:
-                fail(5, "启动器缺扩展加载参数（有效指令行内未找到；缺则命令必然 60 秒超时）")
+            fm = m.group(1)
+            for k in ["name", "description", "version", "updated"]:
+                if not re.search(r"^%s:" % k, fm, re.M):
+                    fail(2, "手册 frontmatter 缺 %s" % k)
+            vm = re.search(r"^version:\s*(\S+)", fm, re.M)
+            if vm:
+                ver = vm.group(1)
+                n = len(re.findall(re.escape(ver), sk))
+                if n > 1:
+                    fail(2, "版本号 %s 在手册内出现 %d 次（应只在 frontmatter 一处）" % (ver, n))
+                if not re.match(r"^v\d+\.\d+", ver):
+                    fail(2, "版本号格式异常：%s" % ver)
 
-    # ⑥ 交叉引用不悬空
-    heads_num = {}
-    for m in re.finditer(r"^#{2,4}\s+(\d+(?:\.\d+)*)\s", sk, re.M):
-        heads_num[m.group(1)] = m.start()
-    bodies = {}  # 节号 -> 节内**自身**正文（到下一个同级或更高级标题，或任意子节标题）
-    hs = [(m.start(), m.group(2), len(m.group(1))) for m in
-          re.finditer(r"^(#{2,4})\s+(\d+(?:\.\d+)*)[^\n]*$", sk, re.M)]
-    for i, (pos, num, lvl) in enumerate(hs):
-        end = len(sk)
-        for pos2, num2, lvl2 in hs[i + 1:]:
-            # 2026-09-18 修：原判据只在下级标题 **层级 <= 本级** 时才收边，
-            # 于是 §3.0 的正文把 §3.0.1–§3.0.4 四个子节全吞了进去——
-            # 子节里的编号列表（升级步骤 1./2./3.）被当成「§3.0 的第 N 条」，
-            # 使 §3.0.1 这类子节引用被判为"歧义"（假阳），且父节的条目核查本就该只看自身正文。
-            if lvl2 <= lvl or num2.startswith(num + "."):
-                end = pos2
-                break
-        bodies[num] = sk[pos:end]
-    for cn in ["一", "二", "三", "四", "五", "六"]:
-        if not re.search(r"^##\s+%s、" % cn, sk, re.M):
-            fail(6, "引用了 §%s，但手册无该章" % cn)
-    for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+|\d+)", sk)),
-                      key=lambda x: [int(y) for y in x.split(".")]):
-        if ref in heads_num:
-            continue
-        parts = ref.split(".")
-        if len(parts) == 2:
-            fail(6, "引用 §%s，手册无此节" % ref)
-        else:
-            parent = ".".join(parts[:-1])
-            item = parts[-1]
-            if parent not in bodies:
-                fail(6, "引用 §%s，但其父节 §%s 不存在" % (ref, parent))
-            elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
-                fail(6, "引用 §%s，但 §%s 内无第 %s 条" % (ref, parent, item))
+        # ③ 配方索引 ↔ 磁盘双向一致
+        disk = recipe_dirs()
+        idx = set(re.findall(r"^\|\s*`([a-z0-9\-]+-autofill)`\s*\|", sk, re.M))
+        for name in sorted(idx - set(disk)):
+            fail(3, "§4.7 索引列了 `%s`，磁盘上不存在" % name)
+        for name in sorted(set(disk) - idx):
+            fail(3, "磁盘上有 `%s`，§4.7 索引未收录" % name)
 
-    # ⑥附 配方内的 § 引用（原来只扫手册正文；配方引用悬空同样会把人指错地方）
-    for name in disk:
-        rf = RECIPES / name / "SKILL.md"
-        if not rf.is_file():
-            continue
-        rs = read_utf8(rf)
-        own, _ = doc_heads(rs)
-        for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+|\d+)", rs)),
-                          key=lambda x: [int(y) for y in x.split(".")]):
-            if ref in own or ref in heads_num:
+        # ③附一 手册正文里所有 `recipes/<名>` 指针都要落在磁盘上（2026-09-18 补）
+        # 栅栏测试实证：索引表是双向查的，但**判据表**（侦察时读的那张）里的
+        # `→ recipes/xxx` 指针没人查——把 webform-autofill 改成 nonexistent-fw-autofill，
+        # 退出码仍是 0。侦察时拿到一个不存在的配方名＝当场走进死路，且无人发现。
+        refs = set(re.findall(r"recipes/([a-z0-9\-]+)", sk))
+        for name in sorted(refs - set(disk)):
+            fail(3, "手册正文引用了 `recipes/%s`，磁盘上不存在" % name)
+
+        # ③附 配方内以表格点名的随包脚本 ↔ 磁盘（＋ 占位符声明 ↔ 脚本实际）
+        # 2026-09-17 补：原来只查 §4.7 索引 ↔ recipes/ 目录，配方**内部**写明的脚本清单没人查；
+        # 而清单写错/脚本改名会让按配方操作的人拿到 FileNotFoundError，且任何校验器都不会报。
+        for name in disk:
+            sd = RECIPES / name / "scripts"
+            rf = RECIPES / name / "SKILL.md"
+            if not sd.is_dir() or not rf.is_file():
                 continue
-            if "." in ref:
-                parent, item = ".".join(ref.split(".")[:-1]), ref.split(".")[-1]
-                if parent not in bodies:
-                    fail(6, "配方 `%s` 引用 §%s，手册无父节 §%s" % (name, ref, parent))
-                elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
-                    fail(6, "配方 `%s` 引用 §%s，但 §%s 内无第 %s 条" % (name, ref, parent, item))
-            elif own:
-                warn(6, "配方 `%s` 里的单数字引用 §%s 在配方内无对应节（若指手册章，请写中文数字如 §三）"
-                     % (name, ref))
+            files = sorted(p.name for p in sd.iterdir() if p.is_file())
+            rs = read_utf8(rf)
+            declared = {}
+            for m in re.finditer(r"^\|\s*`([A-Za-z0-9_.\-]+\.(?:js|py))`\s*\|([^\n]*)", rs, re.M):
+                declared[m.group(1)] = m.group(2)
+            for fn, cells in declared.items():
+                if fn not in files:
+                    fail(3, "配方 `%s` 点名了 scripts/%s，磁盘上不存在" % (name, fn))
+                elif fn.endswith(".js"):
+                    dph = set(re.findall(r"\{\{(\w+)\}\}", cells))
+                    real = set(re.findall(r"\{\{(\w+)\}\}", read_utf8(sd / fn)))
+                    if dph != real:
+                        fail(3, "配方 `%s` 的 scripts/%s 占位符声明 %s ≠ 脚本实际 %s"
+                             % (name, fn, sorted(dph) or "—", sorted(real) or "—"))
+            for fn in files:
+                if fn.endswith(".js") and fn not in declared:
+                    warn(3, "配方 `%s` 的 scripts/%s 未在配方内点名（文档可能漏写）" % (name, fn))
 
-    # ⑥附二 三位编号的语义歧义（2026-09-18 补）
-    # 手册实际存在两套写法：`§2.1.5`＝§2.1 内第 5 条（无同名标题），`§3.7.5`＝§3.7 内第 5 条。
-    # 校验器按后者放行是对的，但若某父节**同时**有 `### X.Y.N` 子节标题和 `N.` 编号条目，
-    # 同一串引用就真歧义——一半人读成子节、一半人读成条目。仅此情形报出。
-    for ref in sorted(set(re.findall(r"§(\d+\.\d+\.\d+)", sk))):
-        if ref not in heads_num:
-            continue  # 无同名标题 → 只能是「父节内第 N 条」，无歧义
-        parent, item = ".".join(ref.split(".")[:-1]), ref.split(".")[-1]
-        if parent in bodies and re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
-            warn(6, "§%s 既有同名子节标题，父节 §%s 里又有第 %s 条编号条目——引用歧义，"
-                 "建议引用改写「§%s 第 %s 条」" % (ref, parent, item, parent, item))
+        # ④ 配方 frontmatter
+        for name in disk:
+            f = RECIPES / name / "SKILL.md"
+            if not f.is_file():
+                fail(4, "配方 `%s` 缺 SKILL.md" % name)
+                continue
+            s = read_utf8(f)
+            mm = re.match(r"^---\s*\n(.*?)\n---\s*\n", s, re.S)
+            if not mm:
+                fail(4, "配方 `%s` 缺 frontmatter" % name)
+                continue
+            for k in ["name", "description"]:
+                if not re.search(r"^%s:" % k, mm.group(1), re.M):
+                    fail(4, "配方 `%s` frontmatter 缺 %s" % (name, k))
+            nm = re.search(r"^name:\s*(\S+)", mm.group(1), re.M)
+            if nm and nm.group(1) != name:
+                fail(4, "配方 `%s` 的 frontmatter name=%s 与目录名不一致" % (name, nm.group(1)))
 
-    # ⑥附三 根级文档的 § 引用（2026-09-22 补）：⑥ 原先只扫手册正文与配方，根级上手文档
-    # （`README.md`）里「§1.1／§2.1／§6.2」这类指向手册的引用无人管——手册一旦改节号，
-    # 文档就静默指错地方，而两侧校验器都不报（本文档 2026-09-22 新增时留下的缺口）。
-    # 范围只取**包根**的 `.md`：`recipes/*/SKILL.md` 与 `templates/CODEBUDDY.md` 不在此列——
-    # 模板里的 § 号指**生成到使用者的项目级要求文件**（及其 §〇），拿本手册的标题去比对必是假阳。
-    # 只校 `§X.Y` 及更长的编号；单独的 `§3` 不校（章号在手册里用中文数字，无法判定指节还是指章），
-    # `§〇.x` 因正则只认阿拉伯数字而天然不参与。
-    for rp in sorted(ROOT.glob("*.md")):
-        if rp.resolve() == MANUAL.resolve():
-            continue  # 手册正文已在上文查过
-        rs = read_text(rp)
-        if rs is None:
-            continue
-        for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+)", rs)),
+        # ⑤ 启动器模板
+        if not BAT.is_file():
+            fail(5, "缺 scripts/launch-browser.bat")
+        else:
+            b = read_text(BAT)
+            if b is None:
+                fail(5, "launch-browser.bat 既非 UTF-8 也非 GBK")
+            else:
+                for ph in ["__CLI__", "__BROWSER__", "__URL__", "__LOG__"]:
+                    if b.count(ph) < 2:
+                        warn(5, "启动器占位符 %s 出现次数 <2（可能已被替换为实值）" % ph)
+                # 护栏与扩展参数只看**有效指令行**：注释（REM／::）里的同名串不算数。
+                # 2026-09-17 栅栏测试：保留注释、删掉真实启动行上的参数 → 原判据仍报 OK（假绿）。
+                code_lines = [l for l in b.splitlines()
+                              if l.strip() and not l.strip().upper().startswith("REM")
+                              and not l.strip().startswith("::")]
+                code = "\n".join(code_lines)
+                # 2026-09-19 加固：原判据等价于「`:NOCONFIG` 与 `exit /b 1` 两个字样出现过」，
+                # 与「护栏真的拦得住」不等价——栅栏测试实测 4 种改写假绿：删掉四条跳转判断只留标签、
+                # 四条全改注释、跳转目标改名、掏空分支实体（字样仍留在标签上）。
+                # 改判**控制流可达**：须存在指向该标签的条件跳转指令行 ＋ 该标签行 ＋ 标签段内的 exit /b 1。
+                jumps = [l for l in code_lines
+                         if re.match(r"^\s*if\b.*\bgoto\s+:?NOCONFIG\b", l, re.I)]
+                lab = next((i for i, l in enumerate(code_lines)
+                            if re.match(r"^\s*:NOCONFIG\b", l, re.I)), None)
+                if not jumps or lab is None:
+                    fail(5, "启动器缺「占位符未替换即中止」护栏：须同时存在指向 `:NOCONFIG` 的条件跳转指令行"
+                            "与标签行（有效指令行内；只剩字样不算）")
+                else:
+                    tail = []
+                    for l in code_lines[lab:]:
+                        if re.match(r"^\s*:\w+", l) and not re.match(r"^\s*:NOCONFIG\b", l, re.I):
+                            break
+                        tail.append(l)
+                    if not re.search(r"\bexit\s+/b\s+1\b", "\n".join(tail), re.I):
+                        fail(5, "启动器 `:NOCONFIG` 段内无 `exit /b 1`（中止后未返回失败码）")
+                sets = dict(re.findall(r'set\s+"(\w+)=(__\w+__)"', code, re.I))
+                guarded = set()
+                for l in jumps:
+                    mg = re.match(r'^\s*if\s+"%(\w+)%"\s*==\s*"(__\w+__)"', l, re.I)
+                    if mg:
+                        guarded.add(mg.group(1))
+                miss = sorted(set(sets) - guarded)
+                if miss:
+                    warn(5, "启动器护栏未覆盖全部未替换占位符：%s" % "、".join(miss))
+                if "--display-invisible-extension=true" not in code:
+                    fail(5, "启动器缺扩展加载参数（有效指令行内未找到；缺则命令必然 60 秒超时）")
+
+        # ⑥ 交叉引用不悬空
+        heads_num = {}
+        for m in re.finditer(r"^#{2,4}\s+(\d+(?:\.\d+)*)\s", sk, re.M):
+            heads_num[m.group(1)] = m.start()
+        bodies = {}  # 节号 -> 节内**自身**正文（到下一个同级或更高级标题，或任意子节标题）
+        hs = [(m.start(), m.group(2), len(m.group(1))) for m in
+              re.finditer(r"^(#{2,4})\s+(\d+(?:\.\d+)*)[^\n]*$", sk, re.M)]
+        for i, (pos, num, lvl) in enumerate(hs):
+            end = len(sk)
+            for pos2, num2, lvl2 in hs[i + 1:]:
+                # 2026-09-18 修：原判据只在下级标题 **层级 <= 本级** 时才收边，
+                # 于是 §3.0 的正文把 §3.0.1–§3.0.4 四个子节全吞了进去——
+                # 子节里的编号列表（升级步骤 1./2./3.）被当成「§3.0 的第 N 条」，
+                # 使 §3.0.1 这类子节引用被判为"歧义"（假阳），且父节的条目核查本就该只看自身正文。
+                if lvl2 <= lvl or num2.startswith(num + "."):
+                    end = pos2
+                    break
+            bodies[num] = sk[pos:end]
+        for cn in ["一", "二", "三", "四", "五", "六"]:
+            if not re.search(r"^##\s+%s、" % cn, sk, re.M):
+                fail(6, "引用了 §%s，但手册无该章" % cn)
+        for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+|\d+)", sk)),
                           key=lambda x: [int(y) for y in x.split(".")]):
             if ref in heads_num:
                 continue
+            parts = ref.split(".")
+            if len(parts) == 2:
+                fail(6, "引用 §%s，手册无此节" % ref)
+            else:
+                parent = ".".join(parts[:-1])
+                item = parts[-1]
+                if parent not in bodies:
+                    fail(6, "引用 §%s，但其父节 §%s 不存在" % (ref, parent))
+                elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
+                    fail(6, "引用 §%s，但 §%s 内无第 %s 条" % (ref, parent, item))
+
+        # ⑥附 配方内的 § 引用（原来只扫手册正文；配方引用悬空同样会把人指错地方）
+        for name in disk:
+            rf = RECIPES / name / "SKILL.md"
+            if not rf.is_file():
+                continue
+            rs = read_utf8(rf)
+            own, _ = doc_heads(rs)
+            for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+|\d+)", rs)),
+                              key=lambda x: [int(y) for y in x.split(".")]):
+                if ref in own or ref in heads_num:
+                    continue
+                if "." in ref:
+                    parent, item = ".".join(ref.split(".")[:-1]), ref.split(".")[-1]
+                    if parent not in bodies:
+                        fail(6, "配方 `%s` 引用 §%s，手册无父节 §%s" % (name, ref, parent))
+                    elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
+                        fail(6, "配方 `%s` 引用 §%s，但 §%s 内无第 %s 条" % (name, ref, parent, item))
+                elif own:
+                    warn(6, "配方 `%s` 里的单数字引用 §%s 在配方内无对应节（若指手册章，请写中文数字如 §三）"
+                         % (name, ref))
+
+        # ⑥附二 三位编号的语义歧义（2026-09-18 补）
+        # 手册实际存在两套写法：`§2.1.5`＝§2.1 内第 5 条（无同名标题），`§3.7.5`＝§3.7 内第 5 条。
+        # 校验器按后者放行是对的，但若某父节**同时**有 `### X.Y.N` 子节标题和 `N.` 编号条目，
+        # 同一串引用就真歧义——一半人读成子节、一半人读成条目。仅此情形报出。
+        for ref in sorted(set(re.findall(r"§(\d+\.\d+\.\d+)", sk))):
+            if ref not in heads_num:
+                continue  # 无同名标题 → 只能是「父节内第 N 条」，无歧义
             parent, item = ".".join(ref.split(".")[:-1]), ref.split(".")[-1]
-            if parent not in bodies:
-                fail(6, "根级文档 `%s` 引用 §%s，手册无父节 §%s" % (rp.name, ref, parent))
-            elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
-                fail(6, "根级文档 `%s` 引用 §%s，但 §%s 内无第 %s 条" % (rp.name, ref, parent, item))
+            if parent in bodies and re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
+                warn(6, "§%s 既有同名子节标题，父节 §%s 里又有第 %s 条编号条目——引用歧义，"
+                     "建议引用改写「§%s 第 %s 条」" % (ref, parent, item, parent, item))
 
-    # ⑦⑧ 全包扫描
-    all_files = []
-    for dp, dn, fn in os.walk(str(ROOT)):
-        # `__pycache__` 是解释器生成的字节码缓存、不是交付物；当文本读会报「编码无法解析」，
-        # 而它可能是别人随手 `python -m py_compile` 留下的——不算包自洽问题（2026-09-22 实测）。
-        # `.git` 同样是版本控制目录、不是交付物：仓库一旦有提交，`.git/index` 与 `.git/objects/*`
-        # 是二进制，当文本读会报「编码无法解析」（2026-09-23 实测），故与 `__pycache__` 一并排除。
-        dn[:] = [d for d in dn if d not in (".git", "__pycache__")]
-        for f in fn:
-            all_files.append(Path(dp) / f)
-    for p in sorted(all_files):
-        rel = p.relative_to(ROOT).as_posix()
-        t = read_text(p)
-        if t is None:
-            fail(9, "%s 编码无法解析" % rel)
-            continue
-        if "\ufffd" in t:
-            fail(9, "%s 含替换字符 U+FFFD（编码损坏）" % rel)
-        if p.resolve() == SELF:
-            continue  # 本脚本自身必然含下列模式字面量，不参与 ⑦⑧
-        for k in deny:
-            if k in t:
-                fail(7, "%s 命中黑名单词「%s」" % (rel, k))
-        if re.search(r"(?<!\d)1[3-9]\d{9}(?!\d)", t):
-            fail(7, "%s 疑似手机号" % rel)
-        if re.search(r"(?<!\d)\d{17}[\dXx](?!\d)", t):
-            fail(7, "%s 疑似身份证号" % rel)
-        if re.search(r"[\w.\-]+@[\w\-]+\.[A-Za-z]{2,}", t):
-            fail(7, "%s 疑似邮箱" % rel)
-        # 成绩／证书类**具体值**（2026-09-22 补）：配方是手法文档，示例一律用占位符，
-        # 出现「599分」这种真实成绩就是把使用者数据写进了包（实测漏过一处：证书示例把
-        # 使用者的六级成绩原样写进命令行）。判据取**形状**不取具体值，故不携带个人数据。
-        for rx, what in ((r"(?<![\d.])\d{3}\s*分", "三位数成绩"),
-                         (r"(?:雅思|托福|IELTS|TOEFL|六级|四级|CET[-\s]?[46]|GPA)\s*[（(]?[^）)\n]{0,6}[）)]?\s*[=＝:：]\s*\d", "考试名后直接跟分数")):
-            m = re.search(rx, t)
+        # ⑥附三 根级文档的 § 引用（2026-09-22 补）：⑥ 原先只扫手册正文与配方，根级上手文档
+        # （`README.md`）里「§1.1／§2.1／§6.2」这类指向手册的引用无人管——手册一旦改节号，
+        # 文档就静默指错地方，而两侧校验器都不报（本文档 2026-09-22 新增时留下的缺口）。
+        # 范围只取**包根**的 `.md`：`recipes/*/SKILL.md` 与 `templates/CODEBUDDY.md` 不在此列——
+        # 模板里的 § 号指**生成到使用者的项目级要求文件**（及其 §〇），拿本手册的标题去比对必是假阳。
+        # 只校 `§X.Y` 及更长的编号；单独的 `§3` 不校（章号在手册里用中文数字，无法判定指节还是指章），
+        # `§〇.x` 因正则只认阿拉伯数字而天然不参与。
+        for rp in sorted(ROOT.glob("*.md")):
+            if rp.resolve() == MANUAL.resolve():
+                continue  # 手册正文已在上文查过
+            rs = read_text(rp)
+            if rs is None:
+                continue
+            for ref in sorted(set(re.findall(r"§(\d+(?:\.\d+)+)", rs)),
+                              key=lambda x: [int(y) for y in x.split(".")]):
+                if ref in heads_num:
+                    continue
+                parent, item = ".".join(ref.split(".")[:-1]), ref.split(".")[-1]
+                if parent not in bodies:
+                    fail(6, "根级文档 `%s` 引用 §%s，手册无父节 §%s" % (rp.name, ref, parent))
+                elif not re.search(r"^\s*%s\.\s" % re.escape(item), bodies[parent], re.M):
+                    fail(6, "根级文档 `%s` 引用 §%s，但 §%s 内无第 %s 条" % (rp.name, ref, parent, item))
+
+        # ⑦⑧ 全包扫描（all_files 与配方目录已在 main 开头算好，两档共用）
+        for p in sorted(all_files):
+            rel = p.relative_to(ROOT).as_posix()
+            t = read_text(p)
+            if t is None:
+                fail(9, "%s 编码无法解析" % rel)
+                continue
+            if "\ufffd" in t:
+                fail(9, "%s 含替换字符 U+FFFD（编码损坏）" % rel)
+            if p.resolve() == SELF:
+                continue  # 本脚本自身必然含下列模式字面量，不参与 ⑦⑧
+            # 黑名单文件自身就是「被扫描词」的字面量来源，扫它必然自命中——与 SELF 同理排除。
+            # （2026-09-23 实测：按手册 §6.3 末自建 scripts/verify-deny.txt 后，校验器立刻报
+            #  「verify-deny.txt 命中黑名单词」并 FAIL，使这条文档化的工作流一建即坏。）
+            if p.resolve() == DENY_FILE.resolve():
+                continue
+            for k in deny:
+                if k in t:
+                    fail(7, "%s 命中黑名单词「%s」" % (rel, k))
+            if re.search(r"(?<!\d)1[3-9]\d{9}(?!\d)", t):
+                fail(7, "%s 疑似手机号" % rel)
+            if re.search(r"(?<!\d)\d{17}[\dXx](?!\d)", t):
+                fail(7, "%s 疑似身份证号" % rel)
+            if re.search(r"[\w.\-]+@[\w\-]+\.[A-Za-z]{2,}", t):
+                fail(7, "%s 疑似邮箱" % rel)
+            # 成绩／证书类**具体值**（2026-09-22 补）：配方是手法文档，示例一律用占位符，
+            # 出现「599分」这种真实成绩就是把使用者数据写进了包（实测漏过一处：证书示例把
+            # 使用者的六级成绩原样写进命令行）。判据取**形状**不取具体值，故不携带个人数据。
+            for rx, what in ((r"(?<![\d.])\d{3}\s*分", "三位数成绩"),
+                             (r"(?:雅思|托福|IELTS|TOEFL|六级|四级|CET[-\s]?[46]|GPA)\s*[（(]?[^）)\n]{0,6}[）)]?\s*[=＝:：]\s*\d", "考试名后直接跟分数")):
+                m = re.search(rx, t)
+                if m:
+                    fail(7, "%s 含%s具体值（%s）——示例改用占位符，勿把使用者数据写进包"
+                         % (rel, what, m.group(0).strip()))
+            # 双端术语（2026-09-22 补）：本包面向**单环境接收方**——部署者只有一处工作环境，没有
+            # "第二处"。源环境的措辞若随同步流回包内，读的人会以为哪里配漏了（实测：生成的
+            # `CODEBUDDY.md` 里这类词共 22 处、全无定义，还带一条「台账两侧共同追加」的双写者规则，
+            # 而接收方只有一个写入方）。判据取**词形**：`脚本端`／`文本端`／`两端对齐`／`相对端`
+            # 这类正常用词已前视排除（否则「脚本端 vs 页面端」一写就误报）；
+            # 手册自身描述本判据时也不得写出这些词（写出来自己就命中）。
+            # 2026-09-23 补：同类词形的前约束须**一致**——原先只给第一个词加了前约束、末一个词漏加，
+            # 于是常见词「版本侧」被误报（实测：新写的发布说明一次命中）。补齐前约束。
+            m = re.search(r"(?<![文脚样副版])本端|两端(?!对齐)|跨端|别端|他端|(?<!相)对端|(?<![版])本侧", t)
             if m:
-                fail(7, "%s 含%s具体值（%s）——示例改用占位符，勿把使用者数据写进包"
-                     % (rel, what, m.group(0).strip()))
-        # 双端术语（2026-09-22 补）：本包面向**单环境接收方**——部署者只有一处工作环境，没有
-        # "第二处"。源环境的措辞若随同步流回包内，读的人会以为哪里配漏了（实测：生成的
-        # `CODEBUDDY.md` 里这类词共 22 处、全无定义，还带一条「台账两侧共同追加」的双写者规则，
-        # 而接收方只有一个写入方）。判据取**词形**：`脚本端`／`文本端`／`两端对齐`／`相对端`
-        # 这类正常用词已前视排除（否则「脚本端 vs 页面端」一写就误报）；
-        # 手册自身描述本判据时也不得写出这些词（写出来自己就命中）。
-        m = re.search(r"(?<![文脚样副版])本端|两端(?!对齐)|跨端|别端|他端|(?<!相)对端|本侧", t)
-        if m:
-            fail(7, "%s 含双端术语「%s」——本包是单环境成品，改用「本项目」／「源环境」／「其他通道」"
-                 % (rel, m.group(0)))
-        # 盘符绝对路径：前视排除 http:// 这类协议串里的 "p:/"（否则每个 URL 都误报）。
-        # 2026-09-17 补：斜杠开头的泛化占位符（如 `/path/to/x.py`、`/usr/bin`）不算环境专属路径，
-        # 只有带真实用户名或带盘符的**具体**路径才算。判据区分靠"是否落在占位符包里"——
-        # 占位符包 = 含 `path/to`、`<...>`、`...`、`示例`、`你的`、`目录` 等字样的写法。
-        for m in re.finditer(r"(?<![A-Za-z:])[A-Za-z]:[\\/][^\s`\"')\]|,;]*", t):
-            if m.group(0).rstrip("\\/") == m.group(0)[:2]:
-                continue
-            fail(8, "%s 含本机盘符绝对路径（%s）" % (rel, m.group(0)))
-        for m in re.finditer(r"/(?:Users|home)/[^/\s]+/[^\s`\"')\]|,;]*", t):
-            fail(8, "%s 含本机家目录绝对路径（%s）" % (rel, m.group(0)))
-        for m in re.finditer(r"/(?:[A-Za-z0-9_.\-]+/){2,}[A-Za-z0-9_.\-]+\.[A-Za-z0-9]+", t):
-            seg = m.group(0)
-            # 排除：泛化占位符、系统目录通用写法、包内配方相对引用、URL 路径
-            if any(k in seg for k in ("path/to", "/**/", "<", ">", "示例", "你的", "目录")):
-                continue
-            if re.search(r"/(usr|etc|opt|var|tmp|bin|srv|mnt|root)/", seg):
-                continue
-            # 形如 /a-autofill/SKILL.md 是包内配方间的相对引用，不是绝对路径
-            if re.search(r"^/[a-z0-9\-]*(autofill|recipes)/", seg, re.I):
-                continue
-            # URL 路径：紧跟在域名（xx.yy/...）或协议（//...）之后；或在同一反引号段内出现域名
-            pre = t[max(0, m.start() - 40):m.start()]
-            if re.search(r"(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}/[^\s]*$", pre) or pre.endswith("/"):
-                continue
-            j = t.rfind("`", 0, m.start())
-            k = t.find("`", m.start())
-            if j != -1 and k != -1 and re.search(r"(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}", t[j:k]):
-                continue
-            warn(8, "%s 含斜杠绝对路径写法（%s）；若非泛化占位符请改为 `<目录>/...`" % (rel, seg))
-        if p.suffix.lower() == ".md":
-            check_md_tables(t, rel)
+                fail(7, "%s 含双端术语「%s」——本包是单环境成品，改用「本项目」／「源环境」／「其他通道」"
+                     % (rel, m.group(0)))
+            # 盘符绝对路径：前视排除 http:// 这类协议串里的 "p:/"（否则每个 URL 都误报）。
+            # 2026-09-17 补：斜杠开头的泛化占位符（如 `/path/to/x.py`、`/usr/bin`）不算环境专属路径，
+            # 只有带真实用户名或带盘符的**具体**路径才算。判据区分靠"是否落在占位符包里"——
+            # 占位符包 = 含 `path/to`、`<...>`、`...`、`示例`、`你的`、`目录` 等字样的写法。
+            for m in re.finditer(r"(?<![A-Za-z:])[A-Za-z]:[\\/][^\s`\"')\]|,;]*", t):
+                if m.group(0).rstrip("\\/") == m.group(0)[:2]:
+                    continue
+                fail(8, "%s 含本机盘符绝对路径（%s）" % (rel, m.group(0)))
+            for m in re.finditer(r"/(?:Users|home)/[^/\s]+/[^\s`\"')\]|,;]*", t):
+                fail(8, "%s 含本机家目录绝对路径（%s）" % (rel, m.group(0)))
+            for m in re.finditer(r"/(?:[A-Za-z0-9_.\-]+/){2,}[A-Za-z0-9_.\-]+\.[A-Za-z0-9]+", t):
+                seg = m.group(0)
+                # 排除：泛化占位符、系统目录通用写法、包内配方相对引用、URL 路径
+                if any(k in seg for k in ("path/to", "/**/", "<", ">", "示例", "你的", "目录")):
+                    continue
+                if re.search(r"/(usr|etc|opt|var|tmp|bin|srv|mnt|root)/", seg):
+                    continue
+                # 形如 /a-autofill/SKILL.md 是包内配方间的相对引用，不是绝对路径
+                if re.search(r"^/[a-z0-9\-]*(autofill|recipes)/", seg, re.I):
+                    continue
+                # URL 路径：紧跟在域名（xx.yy/...）或协议（//...）之后；或在同一反引号段内出现域名
+                pre = t[max(0, m.start() - 40):m.start()]
+                if re.search(r"(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}/[^\s]*$", pre) or pre.endswith("/"):
+                    continue
+                j = t.rfind("`", 0, m.start())
+                k = t.find("`", m.start())
+                if j != -1 and k != -1 and re.search(r"(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}", t[j:k]):
+                    continue
+                warn(8, "%s 含斜杠绝对路径写法（%s）；若非泛化占位符请改为 `<目录>/...`" % (rel, seg))
+            if p.suffix.lower() == ".md":
+                check_md_tables(t, rel)
 
-    # ⑨ 配方状态声明
-    for name in disk:
-        f = RECIPES / name / "SKILL.md"
-        if not f.is_file():
-            continue
-        s = read_utf8(f)
-        if ("未在本通道跑过的只有三种动作" not in s) and ("本通道已复现的动作" not in s):
-            warn(9, "配方 `%s` 缺通道状态声明（未复现三动作 / 已复现）" % name)
+        # ⑨ 配方状态声明
+        for name in disk:
+            f = RECIPES / name / "SKILL.md"
+            if not f.is_file():
+                continue
+            s = read_utf8(f)
+            if ("未在本通道跑过的只有三种动作" not in s) and ("本通道已复现的动作" not in s):
+                warn(9, "配方 `%s` 缺通道状态声明（未复现三动作 / 已复现）" % name)
 
     # ⑨附 初始化能力自证（2026-09-20 补）
     # 为什么有这段：只验证「封装体自洽」时，「照 §1.5 建的新环境是不是绿的」无人验——
@@ -1157,11 +1223,15 @@ def main():
 
     # 输出
     print("=" * 60)
-    print("封装体机械校验 —— %s" % ROOT)
+    print("机械校验（%s）—— %s" % (
+        "封装体档·九段＋运行态" if FULL_MODE else "每轮档·运行态＋模板自证", ROOT))
     print("=" * 60)
     print("实物：%d 文件" % len(all_files))
     print("配方：%d 份 %s" % (len(disk), disk))
-    for i in range(1, CHECKS + 1):
+    if not FULL_MODE:
+        print("提示：本档不跑九段（维护者项）。改过手册／配方／脚本／模板后请加 --package 再跑一次。")
+    segs = list(range(1, CHECKS + 1)) if FULL_MODE else [9, 10]
+    for i in segs:
         f = [x for x in fails if x.startswith("[%d]" % i)]
         w = [x for x in warns if x.startswith("[%d]" % i)]
         state = "FAIL" if f else ("WARN" if w else "OK  ")
