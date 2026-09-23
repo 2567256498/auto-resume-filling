@@ -1,0 +1,6 @@
+# 运行 scripts/verify-package.py 会生成 Python 缓存
+__pycache__/
+*.pyc
+
+# 包内校验时用反斜杠重定向误产生的垃圾文件（重定向一律用正斜杠）
+....tmp_*
