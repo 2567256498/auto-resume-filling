@@ -19,6 +19,7 @@
 ⑦个人数据黑名单扫描（含**成绩／证书类具体值**：三位数成绩、考试名后直接跟分数——示例须用占位符，2026-09-22 补）
    ＋**双端术语**扫描（假设存在第二处部署环境的措辞；本包面向单环境接收方，2026-09-22 补）
 ⑧本机绝对路径扫描 ⑨配方通道状态声明齐备 ＋ 编码健康 ＋ Markdown 表格列数与分隔行格数一致
+   ＋ **游离表格行**（以 | 开头却无表头分隔行的块，渲染成普通段落＝表格静默断裂，2026-09-23 补）
    ＋ ⑨附「初始化能力自证」：init-workspace.py 在位且只读封装体、templates/ 占位符与脚本替换表双向闭合、
      templates/ 引用的包内脚本可解析（2026-09-22 补——生成的要求文件不得指向空气）
    （2026-09-20 补：只验证封装体自洽时，「照 §1.5 建的新环境是不是绿的」无人验——与模板事故同类）
@@ -108,8 +109,17 @@ def _split_row(line):
     return cells
 
 
+SEP_RE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+
+
 def check_md_tables(text, rel, seg=9):
-    """表格列数一致：单元格里的裸竖线会被当分隔符（整行错列），分隔行格数与表头不符则整块不成表。"""
+    """表格列数一致：单元格里的裸竖线会被当分隔符（整行错列），分隔行格数与表头不符则整块不成表。
+
+    另查「游离表格行」（2026-09-23 补，v3.0.3 实例）：以 `|` 开头、整块却没有表头分隔行的连续块——
+    渲染器把整块当普通段落（排版里显出带竖线的怪句子），表格静默断裂。
+    原判据只校「已被认出是表的块」，碎掉的那部分不进视野，于是全绿而实坏。
+    判据收窄以防误报：只在块首报一次；块内每行 `|` 数须 ≥2；块内确无分隔行。
+    """
     ls = text.split("\n")
     in_code = False
     i = 0
@@ -119,21 +129,34 @@ def check_md_tables(text, rel, seg=9):
             in_code = not in_code
             i += 1
             continue
-        if (not in_code and s.strip().startswith("|") and i + 1 < len(ls)
-                and re.match(r"^\s*\|[\s:|-]+\|\s*$", ls[i + 1])):
-            n = len(_split_row(s.strip()))
-            ns = len(_split_row(ls[i + 1].strip()))
-            if ns != n:
-                fail(seg, "%s 第 %d 行分隔行 %d 格 ≠ 表头 %d 格（不符时多数渲染器整块不成表）"
-                     % (rel, i + 2, ns, n))
-            j = i + 2
-            while j < len(ls) and ls[j].strip().startswith("|"):
-                c = len(_split_row(ls[j].strip()))
-                if c != n:
-                    fail(seg, "%s 第 %d 行表格 %d 列 ≠ 表头 %d 列（单元格内的裸竖线要写成 \\|）"
-                         % (rel, j + 1, c, n))
-                j += 1
-            i = j
+        if not in_code and s.strip().startswith("|"):
+            # A. 已成表：表头 + 分隔行 + 后续 | 行，校列数
+            if i + 1 < len(ls) and SEP_RE.match(ls[i + 1]):
+                n = len(_split_row(s.strip()))
+                ns = len(_split_row(ls[i + 1].strip()))
+                if ns != n:
+                    fail(seg, "%s 第 %d 行分隔行 %d 格 ≠ 表头 %d 格（不符时多数渲染器整块不成表）"
+                         % (rel, i + 2, ns, n))
+                j = i + 2
+                while j < len(ls) and ls[j].strip().startswith("|"):
+                    c = len(_split_row(ls[j].strip()))
+                    if c != n:
+                        fail(seg, "%s 第 %d 行表格 %d 列 ≠ 表头 %d 列（单元格内的裸竖线要写成 \\|）"
+                             % (rel, j + 1, c, n))
+                    j += 1
+                i = j
+                continue
+            # B. 未成表：整块以 | 开头却无分隔行 → 渲染成普通段落，表格静默断裂
+            if not (i > 0 and ls[i - 1].strip().startswith("|")):      # 只在块首判一次
+                j = i
+                while j < len(ls) and ls[j].strip().startswith("|"):
+                    j += 1
+                blk = [x.strip() for x in ls[i:j]]
+                like_row = all(x.count("|") >= 2 for x in blk)
+                if like_row and not any(SEP_RE.match(x) for x in blk):
+                    fail(seg, "%s 第 %d 行起 %d 行以 | 开头却无表头分隔行（渲染成普通段落、表格静默断裂；"
+                              "补一行 |---| 或去掉竖线）" % (rel, i + 1, len(blk)))
+            i += 1
             continue
         i += 1
 
