@@ -201,6 +201,19 @@ def find_apply(ledger):
     return exact or other
 
 
+def _find_md_apply(ledger):
+    """探测 v3.0.1 短暂采用过的 Markdown 形态投递台账（只用于迁移提示，不参与对账）。"""
+    BAK = ("bak", "backup", "副本", "copy", "存档")
+    for r in [ledger.parent] + list(ledger.parents)[:3]:
+        for p in sorted(r.glob("*/投递*.md")) + sorted(r.glob("*投递*.md")):
+            if not p.is_file() or p.name.startswith("~$") or p.name.startswith("EXPERIENCE"):
+                continue
+            if any(k in p.name.lower() for k in BAK):
+                continue
+            return p
+    return None
+
+
 def xlsx_first_col_int(path):
     """直读 xlsx 的 A 列整数（不依赖 Excel／openpyxl）。
 
@@ -772,11 +785,18 @@ def check_ledger(led, apply_xlsx):
 
     # 投递记录对账
     if apply_xlsx is None:
-        info.append("投递记录对账：跳过（未找到；--apply <xlsx> 指定）")
+        _md = _find_md_apply(led)
+        if _md is not None:
+            warn(10, "发现 Markdown 形态的投递台账 `%s`——规范形态是 xlsx（v3.0.1 曾短暂改为 .md，已回退）；请把已填内容转成 xlsx 后删掉该文件，否则投递序号对账不生效" % _md.name)
+        info.append("投递记录对账：跳过（未找到；--apply <投递台账.xlsx> 指定）")
     else:
         seqs, strange = xlsx_first_col_int(apply_xlsx)
-        if not seqs:
-            warn(10, "投递记录 %s 读不到序号列" % apply_xlsx.name)
+        if not seqs and not strange:
+            # 只有表头＝刚初始化、尚无投递行（2026-09-23 补：投递台账形态回 xlsx 后，
+            # 新环境初态会命中这一支——初态不是异常，不能让它一建出来就带 WARN）。
+            info.append("投递记录：初态（0 行，仅表头）")
+        elif not seqs:
+            warn(10, "投递记录 %s 读不到序号列（%d 个非数字单元格）" % (apply_xlsx.name, strange))
         else:
             mx = max(seqs)
             gaps = sorted(set(range(1, mx + 1)) - set(seqs))

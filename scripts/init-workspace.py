@@ -79,6 +79,66 @@ def write_if_absent(path, text, force=False):
     return True
 
 
+def write_apply_xlsx(path, force=False):
+    """生成投递台账的 xlsx 骨架（只有表头行，不依赖 Excel／openpyxl／第三方库）。
+
+    投递台账的规范形态是**单个 xlsx**（手册附录 C／§2.1.5）：序号列是两侧计数与核查的
+    公共锚点，xlsx 的单元格类型稳定，且校验器第十段直读它的 A 列做序号连续性对账。
+    二进制无法用文本模板块承载，故由本函数内建（文本模板只从手册附录 A／B 抽取）。
+    返回 True 表示已写入。
+    """
+    p = Path(path)
+    if p.exists() and p.stat().st_size > 0 and not force:
+        fail("目标已存在且非空，未覆盖：%s（要重建请加 --force）" % p)
+        return False
+    header = ["序号", "投递日期", "公司", "岗位", "投递渠道", "状态", "备注"]
+    cells = "".join(
+        '<c r="%s1" t="inlineStr"><is><t>%s</t></is></c>' % (chr(ord("A") + i), h)
+        for i, h in enumerate(header))
+    parts = {
+        "[Content_Types].xml":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            "</Types>",
+        "_rels/.rels":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            "</Relationships>",
+        "xl/workbook.xml":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+            ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="投递台账" sheetId="1" r:id="rId1"/></sheets>'
+            "</workbook>",
+        "xl/_rels/workbook.xml.rels":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            "</Relationships>",
+        "xl/worksheets/sheet1.xml":
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetData><row r="1">' + cells + "</row></sheetData></worksheet>",
+    }
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import zipfile
+        with zipfile.ZipFile(str(p), "w", zipfile.ZIP_DEFLATED) as z:
+            for name in ("[Content_Types].xml", "_rels/.rels", "xl/workbook.xml",
+                         "xl/_rels/workbook.xml.rels", "xl/worksheets/sheet1.xml"):
+                z.writestr(name, parts[name])
+    except (OSError, zipfile.BadZipFile) as e:
+        fail("写投递台账失败 %s：%s" % (p, e))
+        return False
+    ok("已生成 %s（xlsx 表头行，%d B）" % (p, p.stat().st_size))
+    return True
+
+
 def extract_block(manual_text, header_line):
     """从手册里抽取以 header_line 开头、紧随其后的第一个 ```markdown 代码块。
 
@@ -122,6 +182,15 @@ def clean_tmp(project_dir):
     它们是"要留的"，误清会让回滚与追溯失去凭据。清理前先印清单。
     """
     pd = Path(project_dir)
+    if not pd.is_dir():
+        # 项目根不存在＝路径多半写错了。这里必须报错：静默回「没有临时产物」会让人
+        # 以为已经清完——与 §1.5「缺了不报错」是同一种失效（2026-09-23 实测）。
+        print("=" * 64)
+        print("临时产物清理 —— %s" % (pd / ".workbuddy" / "tmp"))
+        print("=" * 64)
+        print("FAIL 项目根不存在：%s（--project 指向的目录必须是已存在的项目根）" % pd)
+        print("退出码：1")
+        return 1
     tmp = pd / ".workbuddy" / "tmp"
     print("=" * 64)
     print("临时产物清理 —— %s" % tmp)
@@ -167,7 +236,7 @@ def guess_paths(project_dir):
         "info_dir": str(pd / "info"),
         "data_dir": str(pd / "info"),
         "data_file": str(pd / "info" / "简历信息库.md"),
-        "delivery_ledger": str(pd / "info" / "投递台账.md"),
+        "delivery_ledger": str(pd / "info" / "投递台账.xlsx"),
         "ledger": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-LEDGER.md"),
         "changelog": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-CHANGELOG.md"),
         "channel_file": str(pd / ".workbuddy" / "skills" / "CHANNEL-qqbrowser.md"),
@@ -376,7 +445,7 @@ def main():
         cfg["data_dir"] = _d
         cfg["info_dir"] = _d
         cfg["data_file"] = os.path.join(_d, "简历信息库.md")
-        cfg["delivery_ledger"] = os.path.join(_d, "投递台账.md")
+        cfg["delivery_ledger"] = os.path.join(_d, "投递台账.xlsx")
     cfg["data_file"] = opt("--data-file", cfg["data_file"])
     cfg["delivery_ledger"] = opt("--delivery-ledger", cfg["delivery_ledger"])
     # **信息目录＝数据层所在目录**（不另设配置项）：数据层、投递台账、附件原件同置一处，
@@ -470,17 +539,20 @@ def main():
     if text is not None:
         write_if_absent(cfg["project_dir"] + "/CODEBUDDY.md", text, force)
 
-    # 三个台账类文件同源同路：模板块都在手册附录（A 台账／B 变更档案／C 投递台账），就地抽取、不另存副本。
+    # 台账／变更档案同源同路：模板块都在手册附录（A／B），就地抽取、不另存副本。
     for key, header, label in [
         ("ledger", "**台账模板**", "台账"),
         ("changelog", "**变更档案模板**", "变更档案"),
-        ("delivery_ledger", "**投递台账模板**", "投递台账"),
     ]:
         blk = extract_block(manual, header)
         if blk is None:
             fail("未能从手册附录抽取%s模板（模板块标题或围栏格式变了？）" % label)
         else:
             write_if_absent(cfg[key], blk, force)
+
+    # 投递台账是 xlsx（二进制，无法用模板块承载）：列结构见手册附录 C／§2.1.5，
+    # 由脚本内建表头行生成；校验器第十段的投递记录对账直读它的 A 列。
+    write_apply_xlsx(cfg["delivery_ledger"], force)
 
     write_if_absent(cfg["data_file"], data_skeleton(cfg), force)
 
@@ -503,7 +575,7 @@ def main():
           "投递台账路径、卷首效力顺序与 §五／§六 的通道文件路径" % cfg["project_dir"])
     print("  2. 把简历事实与字段取值逐项填入数据层（%s）—— 这是取数的唯一真源" % cfg["data_file"])
     print("  3. 按手册 §1.1 配置项 8 制备浏览器启动器（可用 scripts/launch-browser.bat 模板）")
-    print("  4. 配方取用**二选一**（手册 §1.5 步骤四）：默认**就地引用**包内 recipes/"
+    print("  4. 配方取用**二选一**（手册 §1.1 配置项 5）：默认**就地引用**包内 recipes/"
           "（多数环境已把它注册成技能，直接可用）；仅当包不在技能扫描路径内，才复制到 %s。"
           "**同一环境同名配方只能存在一份**" % cfg["recipes_dir"])
     print("  5. 跑一次 %s --package 确认包自洽（封装体档·九段，退出码 0）"
