@@ -5,6 +5,8 @@
 用法：
   python scripts/init-workspace.py --check                # 只体检，不写任何文件
   python scripts/init-workspace.py --plan                 # 打印将要生成/引导的清单
+  python scripts/init-workspace.py --clean-tmp --project "<项目根目录>"
+                                                          # 清空 .workbuddy/tmp/（每轮收尾跑）
   python scripts/init-workspace.py --yes \\
       --project "<项目根目录>" \\
       --ledger  "<台账文件路径>" \\
@@ -22,12 +24,17 @@
      同时承载事实／定稿文本与字段取值。
   5. **投递台账单列生成**（2026-09-23 补）——它是使用者唯一会主动翻的账，原先只当数据层的附属，
      实测被整个漏掉、直到使用者发问才发现。模板块在手册附录 C，脚本就地抽取。
+  6. **信息目录与三类运行目录**（2026-09-23 补）——**数据层所在目录即信息目录**（默认 `<项目根>/info/`）：
+     数据层、投递台账、其余信息文件与附件原件同置该目录，**项目根只留要求文件与启动器**；
+     运行产物按性质分三处——`.workbuddy/tmp/`（临时，**每轮收尾清空**）、`.workbuddy/evidence/`（过程证据，保留）、
+     `.workbuddy/backup/`（改前留档，保留）。`--clean-tmp` 只清 tmp，绝不触碰后两者。
 
 本脚本只读封装体、只写使用者指定的路径，不改封装体自身。
 """
 import io
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -108,14 +115,59 @@ def detect_user_rules():
     return "无（本机未见用户级要求文件）"
 
 
+def clean_tmp(project_dir):
+    """清空 `<项目根>/.workbuddy/tmp/` 的直接子项（每轮收尾跑一次）。
+
+    只作用于 tmp/：`evidence/`（过程证据）与 `backup/`（改前留档）**绝不触碰**——
+    它们是"要留的"，误清会让回滚与追溯失去凭据。清理前先印清单。
+    """
+    pd = Path(project_dir)
+    tmp = pd / ".workbuddy" / "tmp"
+    print("=" * 64)
+    print("临时产物清理 —— %s" % tmp)
+    print("=" * 64)
+    if not tmp.is_dir():
+        print("  未建 tmp/（本项目还没有临时产物）")
+    else:
+        items = sorted(tmp.iterdir(), key=lambda p: p.name)
+        if not items:
+            print("  已空，无需清理")
+        total = 0
+        for p in items:
+            if p.is_dir() and not p.is_symlink():
+                sz = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                print("  DEL  %s/（%d B）" % (p.name, sz))
+                shutil.rmtree(str(p), ignore_errors=True)
+            else:
+                try:
+                    sz = p.stat().st_size
+                except OSError:
+                    sz = 0
+                print("  DEL  %s（%d B）" % (p.name, sz))
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+            total += sz
+        print("  共清理 %d 项 / %d B" % (len(items), total))
+    for keep in ("evidence", "backup"):
+        d = pd / ".workbuddy" / keep
+        n = len([f for f in d.rglob("*") if f.is_file()]) if d.is_dir() else 0
+        print("  KEEP .workbuddy/%s/（保留，%d 个文件）" % (keep, n))
+    print("-" * 64)
+    print("退出码：0")
+    return 0
+
+
 def guess_paths(project_dir):
     """按 §1.1 配置表的常见形态猜一组默认路径，供 --plan 展示。"""
     pd = Path(project_dir)
     return {
         "project_requirements": str(pd / "CODEBUDDY.md"),
-        "data_dir": str(pd),
-        "data_file": str(pd / "简历信息库.md"),
-        "delivery_ledger": str(pd / "投递台账.md"),
+        "info_dir": str(pd / "info"),
+        "data_dir": str(pd / "info"),
+        "data_file": str(pd / "info" / "简历信息库.md"),
+        "delivery_ledger": str(pd / "info" / "投递台账.md"),
         "ledger": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-LEDGER.md"),
         "changelog": str(pd / ".workbuddy" / "skills" / "EXPERIENCE-CHANGELOG.md"),
         "channel_file": str(pd / ".workbuddy" / "skills" / "CHANNEL-qqbrowser.md"),
@@ -139,7 +191,7 @@ def _norm(v):
 def build_requirements(cfg):
     """把 templates/CODEBUDDY.md 的占位符换成实值。"""
     c = dict(cfg)
-    for _k in ("project_dir", "data_file", "delivery_ledger", "ledger", "changelog",
+    for _k in ("project_dir", "info_dir", "data_file", "delivery_ledger", "ledger", "changelog",
                "channel_file", "skills_dir", "recipes_dir"):
         if _k in c:
             c[_k] = _norm(c[_k])
@@ -157,6 +209,7 @@ def build_requirements(cfg):
     t = t.replace("__CHANNEL_FILE__", cfg["channel_file"])
     t = t.replace("__RECIPES_DIR__", cfg["recipes_dir"])
     t = t.replace("__PACKAGE_DIR__", _norm(ROOT))
+    t = t.replace("__INFO_DIR__", cfg["info_dir"])
     t = t.replace("__DATA_FILE__", cfg["data_file"])
     t = t.replace("__DELIVERY_LEDGER__", cfg["delivery_ledger"])
     t = t.replace("__SKILLS_DIR__", cfg["skills_dir"])
@@ -189,6 +242,8 @@ def data_skeleton(cfg):
 > **不要拆成两份**——拆开即双真源，而两份不一致时两边都不会报错。
 > **只存数据本身、不存版本变更历史**：changelog／version／更新记录类元信息一律不写入本文件；
 > 填写与投递过程只进投递台账。
+> **本文件所在目录即信息目录**：投递台账、其余信息文件与附件原件（简历 PDF／证件照）同置该目录；
+> 项目根只留项目级要求文件与浏览器启动器，信息文件不得散落在根目录。
 
 ## 一、基本信息
 
@@ -284,6 +339,7 @@ def main():
     mode_check = "--check" in argv
     mode_plan = "--plan" in argv
     force = "--force" in argv
+    mode_clean = "--clean-tmp" in argv
 
     def opt(name, default=None):
         if name in argv:
@@ -310,15 +366,23 @@ def main():
 
     cfg = guess_paths(project_dir or os.getcwd())
     cfg["project_dir"] = project_dir or os.getcwd()
+
+    if mode_clean:
+        return clean_tmp(cfg["project_dir"])
     cfg["ledger"] = opt("--ledger", cfg["ledger"])
     cfg["changelog"] = opt("--changelog", cfg["changelog"])
     if "--data-dir" in argv:
         _d = opt("--data-dir")
         cfg["data_dir"] = _d
+        cfg["info_dir"] = _d
         cfg["data_file"] = os.path.join(_d, "简历信息库.md")
         cfg["delivery_ledger"] = os.path.join(_d, "投递台账.md")
     cfg["data_file"] = opt("--data-file", cfg["data_file"])
     cfg["delivery_ledger"] = opt("--delivery-ledger", cfg["delivery_ledger"])
+    # **信息目录＝数据层所在目录**（不另设配置项）：数据层、投递台账、附件原件同置一处，
+    # 项目根只留要求文件与启动器。可用 --info-dir 显式覆盖。
+    cfg["info_dir"] = opt("--info-dir",
+                          os.path.dirname(cfg["data_file"]) or cfg["data_dir"])
     cfg["channel_file"] = opt("--channel", cfg["channel_file"])
     cfg["recipes_dir"] = opt("--recipes-dir", cfg["recipes_dir"])
     cfg["user_rules_dir"] = opt("--user-rules", cfg["user_rules_dir"])
@@ -347,6 +411,8 @@ def main():
         print("部署初始化清单 —— 封装体 %s（%s）" % (ROOT.name, version))
         print("=" * 64)
         print("项目根：%s" % cfg["project_dir"])
+        print("信息目录：%s（数据层／投递台账／附件原件同置此目录，项目根只留要求文件与启动器）"
+              % cfg["info_dir"])
         print()
         for label, path in checks:
             print("  [%s] %s\n        %s" % ("✓" if Path(path).exists() else " ", label, path))
@@ -388,6 +454,18 @@ def main():
         return 1 if miss else 0
 
     # ── 生成 ────────────────────────────────────────────────────────
+    # 信息目录与三类运行目录先建好：数据层、投递台账与附件原件同置信息目录（项目根只留
+    # 要求文件与启动器）；tmp/ 每轮收尾清空，evidence/ 与 backup/ 保留。
+    for _d in (cfg["info_dir"],
+               os.path.join(cfg["project_dir"], ".workbuddy", "tmp"),
+               os.path.join(cfg["project_dir"], ".workbuddy", "evidence"),
+               os.path.join(cfg["project_dir"], ".workbuddy", "backup")):
+        try:
+            Path(_d).mkdir(parents=True, exist_ok=True)
+            done.append("建目录 %s" % _norm(_d))
+        except OSError as e:
+            fail("建目录失败 %s：%s" % (_d, e))
+
     text = build_requirements(cfg)
     if text is not None:
         write_if_absent(cfg["project_dir"] + "/CODEBUDDY.md", text, force)
@@ -435,6 +513,11 @@ def main():
           % cfg["ledger"])
     print("  7. （可选）若本环境要有独立通道文件（%s），按 §1.1 配置项 3 自行落盘；"
           "没有则由本手册 §三 独立生效" % cfg["channel_file"])
+    print("  8. 临时产物一律落 %s（**每轮收尾清空**，不留到下轮）："
+          "python \"%s\" --clean-tmp --project \"%s\"；过程证据落 .workbuddy/evidence/<轮次>/、"
+          "改前留档落 .workbuddy/backup/<日期>/，两者保留"
+          % (_norm(os.path.join(cfg["project_dir"], ".workbuddy", "tmp")),
+             _norm(SELF), _norm(cfg["project_dir"])))
     print("退出码：%d" % (1 if fails else 0))
     return 1 if fails else 0
 
