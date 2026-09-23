@@ -7,6 +7,8 @@
   python scripts/init-workspace.py --plan                 # 打印将要生成/引导的清单
   python scripts/init-workspace.py --clean-tmp --project "<项目根目录>"
                                                           # 清空 .workbuddy/tmp/（每轮收尾跑）
+  python scripts/init-workspace.py --check --cli "<CLI 绝对路径>"
+                                                          # 通道探测时显式指定 CLI（可选）
   python scripts/init-workspace.py --yes \\
       --project "<项目根目录>" \\
       --ledger  "<台账文件路径>" \\
@@ -29,12 +31,17 @@
      运行产物按性质分三处——`.workbuddy/tmp/`（临时，**每轮收尾清空**）、`.workbuddy/evidence/`（过程证据，保留）、
      `.workbuddy/backup/`（改前留档，保留）。`--clean-tmp` 只清 tmp，绝不触碰后两者。
 
+  7. **通道侧只读探测**（2026-09-23 补）——`--check` 除项目侧五项外，另按手册 §1.0 ① 段只读找一次
+     通道 CLI 并跑 `--help` 取退出码。**只读**：不拉起浏览器、不安装任何东西；**不计入五项、不改退出码**。
+     原先没有这一步——项目侧五项齐全而通道侧没装时体检照样全绿，「没装通道」只能靠人读到 §1.0 才发现。
+
 本脚本只读封装体、只写使用者指定的路径，不改封装体自身。
 """
 import io
 import os
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -488,6 +495,10 @@ def main():
         for label, path in optional:
             print("  [%s] %s\n        %s" % ("✓" if Path(path).exists() else "·", label, path))
         print()
+        print("通道侧（独立于项目侧产物；手册 §1.0 ① 段）：由 --check 只读探测。未装时的官方入口——")
+        print("  · 通道 CLI ：https://pypi.org/project/qqbrowser-skill/")
+        print("  · 浏览器本体：https://browser.qq.com/")
+        print()
         print("可机械生成（脚本直接产出）：")
         print("  · 项目级要求文件 ← templates/CODEBUDDY.md（占位符按 §1.1 配置表替换）")
         print("  · 证据台账／变更档案／投递台账 ← 手册附录 A／B／C 模板块（**唯一真源**，脚本就地抽取，不另存副本）")
@@ -517,9 +528,13 @@ def main():
             else:
                 print("  --    %s（未建，可选项不计缺失）\n        %s" % (label, path))
         print("-" * 64)
+        pc = probe_channel(opt("--cli", ""))
+        print_channel_probe(pc)
+        print("-" * 64)
         miss = sum(1 for _, p in checks if not Path(p).exists())
-        print("缺失 %d 项 / 共 %d 项必检（另 %d 项可选）；退出码：%d"
-              % (miss, len(checks), len(optional), 1 if miss else 0))
+        ch = {"ok": "已就位", "warn": "判据未过", "miss": "未就位"}[pc["state"]]
+        print("缺失 %d 项 / 共 %d 项必检（另 %d 项可选）；通道侧：%s；退出码：%d"
+              % (miss, len(checks), len(optional), ch, 1 if miss else 0))
         return 1 if miss else 0
 
     # ── 生成 ────────────────────────────────────────────────────────
@@ -592,6 +607,86 @@ def main():
              _norm(SELF), _norm(cfg["project_dir"])))
     print("退出码：%d" % (1 if fails else 0))
     return 1 if fails else 0
+
+
+def probe_channel(cli_opt=""):
+    """通道侧只读探测（手册 §1.0 ① 段）：找 CLI → 跑一次 --help 取退出码。
+
+    `cli_opt` 由调用方传入（`main()` 内的 `opt()` 是闭包，模块级函数取不到）。
+
+    **只读**：不拉起浏览器、不安装任何东西。判据取「能打印用法」，因为本通道 CLI
+    **没有 `--version`**（2026-09-23 实测：argparse 直接拒 unrecognized arguments）。
+    返回 {"state": "ok"|"warn"|"miss", "form": str, "path": str, "note": str}。
+    """
+    cands = []  # 有序候选：(命中形态, 路径)
+    if cli_opt:
+        # 显式指定却指错时不静默落到其他候选——否则用户以为在用指定的那个
+        try:
+            _ok = Path(cli_opt).is_file()
+        except OSError:
+            _ok = False
+        if not _ok:
+            return {"state": "warn", "form": "--cli 指定", "path": cli_opt,
+                    "note": "「--cli」指定的路径不是可读文件——请核对绝对路径"}
+        cands.append(("--cli 指定", cli_opt))
+    env = os.environ.get("QQBROWSER_SKILL")
+    if env:
+        cands.append(("环境变量 QQBROWSER_SKILL", env))
+    # 与解释器同目录：通道 CLI 是 pip 包，装它的 env 里 python 与它同目录
+    for nm in ("qqbrowser-skill.exe", "qqbrowser-skill"):
+        cands.append(("与解释器同目录", str(Path(sys.executable).parent / nm)))
+    # 该环境 pip 脚本目录：解释器与 CLI 不在同一 env 时的常见形态（如受管解释器 vs 通道 env）
+    envs_root = Path.home() / ".workbuddy" / "binaries" / "python" / "envs"
+    if envs_root.is_dir():
+        for pat in ("*/Scripts/qqbrowser-skill*", "*/bin/qqbrowser-skill"):
+            for p in sorted(envs_root.glob(pat)):
+                if p.is_file():
+                    cands.append(("pip 脚本目录", str(p)))
+    for nm in ("qqbrowser-skill.exe", "qqbrowser-skill"):
+        w = shutil.which(nm)
+        if w:
+            cands.append(("PATH 裸命令名", w))
+
+    hit = None
+    for form, path in cands:
+        try:
+            if Path(path).is_file():
+                hit = (form, path)
+                break
+        except OSError:
+            continue
+    if hit is None:
+        return {"state": "miss", "form": "", "path": "", "note": ""}
+
+    form, path = hit
+    try:
+        r = subprocess.run([path, "--help"], capture_output=True, text=True, timeout=25)
+    except subprocess.TimeoutExpired:
+        return {"state": "warn", "form": form, "path": path, "note": "--help 25 秒未返回"}
+    except OSError as e:
+        return {"state": "warn", "form": form, "path": path, "note": "无法执行：%s" % e}
+    if r.returncode == 0:
+        return {"state": "ok", "form": form, "path": path, "note": ""}
+    return {"state": "warn", "form": form, "path": path,
+            "note": "--help 退出码 %d（判据要求 0）" % r.returncode}
+
+
+def print_channel_probe(pc):
+    """打印通道侧探测块（三段判据的 ① 段；②③ 段不代查）。"""
+    print("通道侧探测（只读；**不计项目侧五项、不改退出码**——手册 §1.0 ① 段）")
+    if pc["state"] == "ok":
+        print("  OK    通道 CLI 可解析（命中：%s）\n        %s" % (pc["form"], pc["path"]))
+        print("        判据＝能打印用法（--help 退出码 0）")
+        print("        ②③ 段（浏览器在运行／扩展已接入）须由使用者在桌面会话确认，本探测不代查")
+    elif pc["state"] == "warn":
+        print("  WARN  通道 CLI 找到了，但判据未过（命中：%s）\n        %s\n        %s"
+              % (pc["form"], pc["path"], pc["note"]))
+    else:
+        print("  MISS  通道未就位——CLI 解析不到（--cli／环境变量／同目录／pip 脚本目录／PATH 都没有）")
+        print("        处置见手册 §1.0 ① 段；官方入口（包内不抄版本号与直链，以入口页为准）：")
+        print("          · 通道 CLI ：https://pypi.org/project/qqbrowser-skill/")
+        print("          · 浏览器本体：https://browser.qq.com/")
+        print("        装完重跑本体检；若已装只是没解析到，用 --cli <CLI 绝对路径> 或设 QQBROWSER_SKILL")
 
 
 if __name__ == "__main__":
