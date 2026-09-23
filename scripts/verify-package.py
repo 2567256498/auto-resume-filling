@@ -813,6 +813,14 @@ def check_ledger(led, apply_xlsx):
             warn(10, "发现 Markdown 形态的投递台账 `%s`——规范形态是 xlsx（v3.0.1 曾短暂改为 .md，已回退）；请把已填内容转成 xlsx 后删掉该文件，否则投递序号对账不生效" % _md.name)
         info.append("投递记录对账：跳过（未找到；--apply <投递台账.xlsx> 指定）")
     else:
+        # 迁移中间态（v3.0.7 补）：xlsx 正本已建、v3.0.1 的 .md 旧件没删 → 两条投递台账并存。
+        # 序号锚点可能分叉，而两支各自都不报错——正是本段要拦的结构异常（原判据只在 xlsx
+        # 缺席时才探 .md，并存态反而全绿）。
+        _md_left = _find_md_apply(led)
+        if _md_left is not None:
+            fail(10, "迁移中间态：xlsx 正本 `%s` 已存在，但 Markdown 形态的旧台账 `%s` 仍在——两条投递"
+                     "台账并存会让序号锚点分叉（谁都不报错）；确认内容已完整转入 xlsx 后删掉该 .md，"
+                     "只留 xlsx 一份" % (apply_xlsx.name, _md_left.name))
         seqs, strange = xlsx_first_col_int(apply_xlsx)
         if not seqs and not strange:
             # 只有表头＝刚初始化、尚无投递行（2026-09-23 补：投递台账形态回 xlsx 后，
