@@ -88,7 +88,10 @@ def read_utf8(p):
 
 
 def read_text(p):
-    """bat 允许 GBK，其余按 UTF-8。"""
+    """读取时容错：优先 UTF-8，退而 GBK（**仅指解码时不炸**）。
+
+    注意：这不等于「.bat 可以写非 ASCII」——判据见 scan_bat_non_ascii()。
+    """
     raw = p.read_bytes()
     for enc in ("utf-8", "gbk"):
         try:
@@ -96,6 +99,35 @@ def read_text(p):
         except UnicodeDecodeError:
             continue
     return None
+
+
+def scan_bat_non_ascii():
+    """返回包内含**非 ASCII 字节**的 .bat：[相对路径, [行号…]]。
+
+    为什么单列这段（2026-09-24）：本包模板 `scripts/launch-browser.bat` 曾用中文写 REM 注释、
+    文件按 UTF-8 存盘；`cmd.exe` 按本地 ANSI 代码页（中文 Windows＝GBK）解析批处理，
+    注释行被撕成碎片并当命令执行（实测报错 `'紙--display-invisible-extension' 不是内部或外部命令`）。
+    **当时九段全绿**——原判据只判「能否用 UTF-8 或 GBK 解开」＋护栏／参数是否齐，**不看编码本身**。
+    故补此段：包内任何 .bat 含非 ASCII 即判 FAIL（对应手册 §3.0.1 的硬规矩）。
+    """
+    out = []
+    for dp, dn, fn in os.walk(str(ROOT)):
+        dn[:] = [d for d in dn if d not in ("__pycache__", ".git", ".svn", ".hg")]
+        for f in fn:
+            if not f.lower().endswith(".bat"):
+                continue
+            p = Path(dp) / f
+            try:
+                raw = p.read_bytes()
+            except OSError:
+                continue
+            if not any(b > 0x7F for b in raw):
+                continue
+            ln = [str(i + 1) for i, l in
+                  enumerate(raw.decode("utf-8", "replace").splitlines())
+                  if any(ord(c) > 0x7F for c in l)]
+            out.append([str(p.relative_to(ROOT)), ln])
+    return out
 
 
 def _split_row(line):
@@ -1004,6 +1036,13 @@ def main():
                     warn(5, "启动器护栏未覆盖全部未替换占位符：%s" % "、".join(miss))
                 if "--display-invisible-extension=true" not in code:
                     fail(5, "启动器缺扩展加载参数（有效指令行内未找到；缺则命令必然 60 秒超时）")
+
+        # ⑤-2 批处理编码（2026-09-24 加固；说明见 scan_bat_non_ascii）
+        # 扫的是**包内全部** .bat，不只启动器——任何一份写进非 ASCII 都会在 cmd 下炸。
+        for _rel, _ln in scan_bat_non_ascii():
+            fail(5, "`%s` 含非 ASCII 字符（第 %s 行）——cmd.exe 按本地 ANSI 代码页解析批处理，"
+                    "非 ASCII 文本会被撕成假命令；启动器与一切 .bat 一律纯 ASCII（手册 §3.0.1）"
+                    % (_rel, "、".join(_ln[:6])))
 
         # ⑥ 交叉引用不悬空
         heads_num = {}

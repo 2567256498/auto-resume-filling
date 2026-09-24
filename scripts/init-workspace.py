@@ -14,6 +14,12 @@
       --ledger  "<台账文件路径>" \\
       --changelog "<变更档案路径>"
 
+  python scripts/init-workspace.py --make-launcher \
+      --project "<项目根>" --cli "<CLI 路径>" \
+      --browser "<浏览器 exe 路径>" --url "<目标页 URL>"
+                                                         # 由模板生成**纯 ASCII** 浏览器启动器
+                                                         # （不要手写——见下文设计纪律 8）
+
 退出码：0 = 体检通过或已成功生成；1 = 有阻塞项（缺参数／占位符未替换／目标已存在且非空）。
 
 设计纪律（照搬 scripts/launch-browser.bat）：
@@ -30,6 +36,13 @@
      数据层、投递台账、其余信息文件与附件原件同置该目录，**项目根只留要求文件与启动器**；
      运行产物按性质分三处——`.workbuddy/tmp/`（临时，**每轮收尾清空**）、`.workbuddy/evidence/`（过程证据，保留）、
      `.workbuddy/backup/`（改前留档，保留）。`--clean-tmp` 只清 tmp，绝不触碰后两者。
+
+  8. **批处理一律纯 ASCII，并给出生成入口**（2026-09-24 补）——`.bat` 由 cmd.exe 按本地
+     ANSI 代码页（中文 Windows＝GBK）解析；模板原先用中文写 REM 注释、文件按 UTF-8 存，
+     注释行被撕成碎片当命令执行（实测报错 `'紙--display-invisible-extension' 不是内部或外部命令`），
+     而当时九段全绿。**手写启动器是最容易翻车的一步**，故新增 `--make-launcher`：
+     读模板、填取值、产出纯 ASCII 文件；模板与产物**双双强校验 ASCII**，取值含非 ASCII 直接拒绝。
+     同一规矩已进校验器（包内任何 .bat 含非 ASCII 即 FAIL）。
 
   7. **通道侧只读探测**（2026-09-23 补）——`--check` 除项目侧五项外，另按手册 §1.0 ① 段只读找一次
      通道 CLI 并跑 `--help` 取退出码。**只读**：不拉起浏览器、不安装任何东西；**不计入五项、不改退出码**。
@@ -410,12 +423,67 @@ def data_skeleton(cfg):
 """
 
 
+def make_launcher(project_dir, cli, browser, url, log=None, force=False):
+    """由 scripts/launch-browser.bat 模板生成一份**纯 ASCII** 启动器，写进项目根。
+
+    为什么有它：手写启动器时最容易把注释写成中文，而 cmd.exe 按 ANSI/GBK 解析批处理、
+    UTF-8 中文会被撕成假命令（2026-09-24 实测事故）。由模板产出即从源头消掉这一步。
+    取值里含非 ASCII（如中文路径）时**拒绝生成**——批处理里无法安全承载，须换纯 ASCII 路径。
+    """
+    tpl = ROOT / "scripts" / "launch-browser.bat"
+    if not tpl.is_file():
+        print("FAIL 找不到模板 %s" % tpl)
+        return 1
+    tpl_text = tpl.read_text(encoding="utf-8", errors="replace")
+    vals = {
+        "__CLI__": cli or "",
+        "__BROWSER__": browser or "",
+        "__URL__": url or "",
+        "__LOG__": log or os.path.join(project_dir, ".workbuddy", "tmp", "launcher.log"),
+    }
+    missing = sorted(k for k, v in vals.items() if not str(v).strip())
+    if missing:
+        print("FAIL 缺取值：%s" % "、".join(missing))
+        print("     用法：--make-launcher --project <项目根> --cli <CLI 路径> "
+              "--browser <浏览器 exe> --url <目标页 URL> [--launcher-log <日志路径>]")
+        return 1
+    bad = sorted(k for k, v in vals.items() if any(ord(c) > 0x7F for c in str(v)))
+    if bad:
+        print("FAIL 取值含非 ASCII：%s" % "、".join(bad))
+        print("     .bat 必须纯 ASCII（cmd 按本地 ANSI 代码页解析）——把项目根／CLI／浏览器／URL "
+              "换到纯 ASCII 路径下再生成；中文路径无法安全写进批处理。")
+        return 1
+    out = tpl_text
+    for k, v in vals.items():
+        out = out.replace(k, str(v).replace(chr(92), "/"))
+    na = [i + 1 for i, l in enumerate(out.splitlines()) if any(ord(c) > 0x7F for c in l)]
+    if na:
+        print("FAIL 生成结果仍含非 ASCII（模板第 %s 行）——模板本身被改坏了，先修模板"
+              % "、".join(map(str, na[:6])))
+        return 1
+    dst = Path(project_dir) / "launch-browser.bat"
+    if dst.exists() and dst.stat().st_size > 0 and not force:
+        print("FAIL %s 已存在且非空——不覆盖（要重建加 --force）" % dst)
+        return 1
+    os.makedirs(os.path.join(project_dir, ".workbuddy", "tmp"), exist_ok=True)
+    with io.open(str(dst), "w", encoding="ascii", newline="\r\n") as f:
+        f.write(out)
+    print("OK 已生成 %s（纯 ASCII，%d 字节）" % (dst, os.path.getsize(str(dst))))
+    # 打印归一后的实值（写入文件时反斜杠已折成正斜杠，见上 replace）——两处显示不一致会让
+    # 使用者以为写进去的与看到的不同。
+    for _k in ("__CLI__", "__BROWSER__", "__URL__", "__LOG__"):
+        print("   %-9s %s" % (_k.strip("_") + "=", vals[_k].replace(chr(92), "/")))
+    print("   用法：双击运行；窗口停在 Press any key 时**不要关**（常驻 daemon 依赖它存活）。")
+    return 0
+
+
 def main():
     argv = sys.argv[1:]
     mode_check = "--check" in argv
     mode_plan = "--plan" in argv
     force = "--force" in argv
     mode_clean = "--clean-tmp" in argv
+    mode_make = "--make-launcher" in argv
 
     def opt(name, default=None):
         if name in argv:
@@ -436,12 +504,16 @@ def main():
     project_dir = opt("--project")
     if mode_plan and not project_dir:
         project_dir = os.getcwd()
-    if not (mode_check or mode_plan) and not project_dir:
+    if not (mode_check or mode_plan or mode_make) and not project_dir:
         print("FAIL 缺 --project <项目根目录>（或用 --check／--plan 先看清单）")
         return 1
 
     cfg = guess_paths(project_dir or os.getcwd())
     cfg["project_dir"] = project_dir or os.getcwd()
+
+    if mode_make:
+        return make_launcher(cfg["project_dir"], opt("--cli", ""), opt("--browser", ""),
+                             opt("--url", ""), opt("--launcher-log"), force)
 
     if mode_clean:
         return clean_tmp(cfg["project_dir"])
@@ -527,6 +599,21 @@ def main():
                 print("  OK    %s（%d B）\n        %s" % (label, sz, path))
             else:
                 print("  --    %s（未建，可选项不计缺失）\n        %s" % (label, path))
+        # 项目根启动器编码（可选探针，2026-09-24 补）：含非 ASCII 时 cmd 会按 GBK 解析、
+        # 把注释撕成假命令。**只报状态，不计缺失、不改退出码**（与通道侧探针同口径）。
+        bx = Path(cfg["project_dir"]) / "launch-browser.bat"
+        if not bx.is_file():
+            print("  --    项目根未见启动器（可选；制备见手册 §3.0.1）\n        %s" % bx)
+        else:
+            try:
+                _raw = bx.read_bytes()
+            except OSError:
+                _raw = b""
+            if any(b > 0x7F for b in _raw):
+                print("  WARN  项目根启动器含非 ASCII —— cmd 按 GBK 解析会撕出假命令；"
+                      "改用 --make-launcher 重新生成（手册 §3.0.1）\n        %s" % bx)
+            else:
+                print("  OK    项目根启动器为纯 ASCII\n        %s" % bx)
         print("-" * 64)
         pc = probe_channel(opt("--cli", ""))
         print_channel_probe(pc)
@@ -589,7 +676,10 @@ def main():
     print("  1. 打开 %s/CODEBUDDY.md 核对 §〇.5 禁止触碰清单，以及 §〇.1／§一 的数据层**单文件**路径、"
           "投递台账路径、卷首效力顺序与 §五／§六 的通道文件路径" % cfg["project_dir"])
     print("  2. 把简历事实与字段取值逐项填入数据层（%s）—— 这是取数的唯一真源" % cfg["data_file"])
-    print("  3. 按手册 §1.1 配置项 8 制备浏览器启动器（可用 scripts/launch-browser.bat 模板）")
+    print("  3. 按手册 §1.1 配置项 8 制备浏览器启动器——**建议用生成入口**："
+          "%s --make-launcher --project \"%s\" --cli <CLI 路径> "
+          "--browser <浏览器 exe> --url <目标页 URL>（由模板产出、强制纯 ASCII；不要手写）"
+          % (ROOT / "scripts" / "init-workspace.py", cfg["project_dir"]))
     print("  4. 配方取用**二选一**（手册 §1.1 配置项 5）：默认**就地引用**包内 recipes/"
           "（多数环境已把它注册成技能，直接可用）；仅当包不在技能扫描路径内，才复制到 %s。"
           "**同一环境同名配方只能存在一份**" % cfg["recipes_dir"])

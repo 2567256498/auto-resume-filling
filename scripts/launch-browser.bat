@@ -1,16 +1,23 @@
 @echo off
 REM ======================================================================
-REM  浏览器自动化启动器（模板）／ Browser launcher for the autofill channel
+REM  Browser launcher for the autofill channel (template)
 REM
-REM  作用：一条龙完成「关旧实例 → 起常驻 daemon → 带扩展参数开浏览器 → 自检」
-REM  用法：把下面 4 个 __占位符__ 换成目标环境的真实值
-REM        （取值见 SKILL.md §1.1 配置项 8）。
-REM  用法：**每次使用前必须先完全关闭浏览器**——浏览器是单实例的，
-REM        已经开着时再启动，新参数会被吞掉（扩展不加载）。
-REM  注意：末尾会停在 "Press any key to continue"，**那个窗口不要关**
-REM        ——常驻 daemon 依赖它存活。
-REM  注意：扩展加载参数（--display-invisible-extension=true）是**必需开关**，
-REM        不是可选优化；缺它通道命令必然 60 秒超时。
+REM  Purpose: one-shot "close old instance -> start resident daemon ->
+REM           launch browser with extension flags -> self-check"
+REM  Usage:   replace the 4 __placeholders__ below with real values
+REM           (see SKILL.md 1.1, config item 8).
+REM           Run this file ONLY after the browser is fully closed --
+REM           it is single-instance: launching while already open swallows
+REM           the new flags (extension will not load).
+REM  NOTE:    keep ALL comments ASCII-only. cmd.exe parses .bat files in
+REM           the ANSI codepage (GBK on Chinese Windows); non-ASCII text
+REM           in this file gets misread and shreds lines into bogus
+REM           commands (observed on this box: 2026-09-24).
+REM  NOTE:    the window stops at "Press any key to continue" at the end
+REM           -- DO NOT close it, the resident daemon needs it.
+REM  NOTE:    the extension flag --display-invisible-extension=true is a
+REM           REQUIRED switch, not an optional tweak; without it every
+REM           channel command times out after 60s.
 REM ======================================================================
 title Browser Autofill Launcher
 
@@ -19,7 +26,7 @@ set "BROWSER=__BROWSER__"
 set "URL=__URL__"
 set "LOG=__LOG__"
 
-REM ---- 占位符未替换则中止：否则日志会写进名为 __LOG__ 的文件，静默失败 ----
+REM ---- guard: unreplaced placeholders abort the run (no silent failure) ----
 if "%CLI%"=="__CLI__" goto NOCONFIG
 if "%BROWSER%"=="__BROWSER__" goto NOCONFIG
 if "%URL%"=="__URL__" goto NOCONFIG
