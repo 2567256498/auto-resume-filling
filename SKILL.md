@@ -1,7 +1,7 @@
 ---
 name: qqbrowser-resume-fill
 description: 简历网申填写任务手册（封装体：`README.md` 使用说明＋本文件＋`recipes/`＋`scripts/`＋`templates/`，可整体移交）——首次部署初始化、部署配置与移交说明、任务定义与全部硬性要求、QQ 浏览器通道规范、流程与配方分层、经验固化闭环、包内机械校验、自检与失败模式。用于执行网申／招聘表单填写，或通读、修订、移交这套任务。
-version: v3.0.9
+version: v3.1.0
 updated: 2026-09-24
 agent_created: true
 ---
@@ -314,9 +314,10 @@ python scripts/verify-package.py --ledger "<刚生成的台账路径>"   # 期�
 | `find_and_act --by text --action click` | 是**真实点击**，能打开凤凰下拉面板；JS 合成点击、直接点 input、Enter／Space／双击**全部无效** | 同上 |
 | `find_and_act --by label` | 只认**原生 `<label>`**（`for`／包裹）；标题是 `div` 的表单（北森等）**全部不命中** | 同上 |
 | `find_and_act` 多实例匹配 | 默认取**第一个**；`--nth N` 为 **1-based 按 DOM 序**精确定位 | 同上 |
+| `browser_click_element` 对按钮走 JS 回退 | 返回值写 `🖱️ Clicked via encodedId JS fallback`——**不是真实鼠标事件**。对自定义下拉的 input／容器点击打不开面板；**对"保存／暂存／提交"类按钮还可能「返回成功、服务端却没落库」**（页面无任何报错，只有另开标签重载才看得出）→ 这类按钮一律改用 `find_and_act --by text --value "<按钮文本>" --action click --exact` 真实点击，**返回值不作判据**；点一次即停，不连点 | 2026-09-16 点「暂存」曾生效；2026-09-24 在 zhiye 系岗位投递表单被证伪（JS 回退后另开标签重载读到的仍是旧值） |
 | file input 上传 | `fill` 写本地绝对路径**无效**（`value` 空、`files.length=0`，浏览器安全模型禁止脚本写 file 控件）→ 本通道**不能上传** | 同上 |
 | iframe 内元素 | snapshot 索引与语义文本定位**均能命中** iframe 内元素，`browser_input_text --index` **能写入**；但**点击不生效**（未完全跑通，兜底保留） | 2026-09-17 自建 iframe 页实测（`file://` 下 iframe 为跨源，读不到 `contentDocument`） |
-| 页面弹对话框（`beforeunload` 等） | **其后命令整体失效**——`browser_eval_content_js` 直接返回失败并提示 `a dialog is currently open… Please use the "dialog" action to handle it first`；先 `browser_dialog --action accept`（或 `dismiss`）处理，同一求值命令即恢复正常。`--action` 取 `accept｜dismiss`，另有可选 `--text`（prompt 用）；**必须带 `--sessionId`** | 2026-09-19 实测：表单页用 `location.reload()` 做「保存后回读」刷新时被 `beforeunload` 拦下 |
+| 页面弹对话框（`beforeunload` 等） | **其后命令整体失效**——`browser_eval_content_js` 直接返回失败并提示 `a dialog is currently open… Please use the "dialog" action to handle it first`；先 `browser_dialog --action accept`（或 `dismiss`）处理，同一求值命令即恢复正常。`--action` 取 `accept｜dismiss`，另有可选 `--text`（prompt 用）；**必须带 `--sessionId`**。**（2026-09-24 补）**表单页的 `beforeunload` 会**恒挂、且不反映脏态**——首次保存静默失败时照样弹、保存成功后照样弹，**不能当"有未保存改动"的判据**；此时「保存后回读」改为 `browser_tab_open --sessionId <id> --url <同一 URL>` **另开标签**重载读服务端数据，并用 `performance.timeOrigin` 分辨读到的是哪个标签（`performance.now()` 数字大的是留在身后的旧标签，其数据也是旧的） | 2026-09-19 实测：表单页用 `location.reload()` 做「保存后回读」刷新时被 `beforeunload` 拦下；2026-09-24 实测该对话框与本页是否真改动无关（含一次因读错标签而起的「没保存」误判） |
 | 跨会话并发 | **全局串行排队**：一会话的长命令占住执行器时，另一会话命令等其完成才返回（实测等 5 秒）；本次**未触发** `session_busy_timeout`，阈值未测得 | 同上 |
 | `browser_tab_close` | **必须带 `--tabId`**（argparse 必填，不带＝静默无效）；且**不受会话隔离限制，能关掉使用者自己的标签页**——只用来关自建中转页 | `--help` 原文；2026-09-17 实测 |
 | 故障模型 | 命令返回错误码／文本，**进程不崩**；不做跨进程崩溃归因 | 实测 |
@@ -554,6 +555,7 @@ python scripts/verify-package.py --ledger "<刚生成的台账路径>"   # 期�
 | 命令返回错误文本／无响应 | 不等于未执行：先回读页面状态，不盲目重跑（重复提交会弄掉会话） |
 | 单次 eval 写入字段过多 → 执行超时 | 超时不代表未执行，先回读；拆成 5–8 字段一批 |
 | 页面看着有值，保存后却空了 | 读的是 `input.value` 而非框架状态；改读 fiber／scope，或改用真实键入重写 |
+| 「保存」类按钮点完没报错，服务端数据却没变 | `browser_click_element` 走 JS 回退时不触发框架处理器（返回值反而写 `Clicked via encodedId JS fallback`，看着像成功）——**保存／暂存／提交一律用 `find_and_act --by text --value "<按钮文本>" --action click --exact` 真实点击**；判据只能是「另开标签重载后回读」（§3.4） |
 | 自定义下拉点不开、选项一闪就没 | 选项在 body 级 portal 动态渲染，跨调用即关闭——**不模拟鼠标**，走组件实例数据入口 |
 | 按文本匹配元素全部落空 | `innerText` 对未进入视口的元素返回空串，改用 `textContent` |
 | 动态增删字段填错区块 | 序号定位随重渲染失效——按行 label 定位 |
@@ -562,7 +564,7 @@ python scripts/verify-package.py --ledger "<刚生成的台账路径>"   # 期�
 | 升级后浏览器「不见了」、命令一律 60 秒超时 | 见 §3.0.4（升级流程杀浏览器且修复必败、`install` 检测假阳性）；处置＝请使用者用 §3.0.1 启动器重开，不要反复重试命令 |
 | 命令恒报「浏览器未启动，尝试启动」、目标页被洗回首页、标签 ID 反复递增 | 浏览器其实**没在运行**，是 CLI 每条命令临时拉起一个、命令结束即回收。**先只读查进程表**（§1.0 ② 段）确认；不在就停下来请使用者双击启动器，**不自行拉起**（§3.0／§3.0.3） |
 | 启动器双击后报乱码／假命令（如 `'紙--...' 不是内部或外部命令`） | `.bat` 里写进了非 ASCII（多半是中文注释／UTF-8 存盘）——`cmd.exe` 按 ANSI(GBK) 解析，注释行被撕成碎片当命令执行。**改写为纯 ASCII**，或直接用 `init-workspace.py --make-launcher` 重新生成（§3.0.1） |
-| 刷新／求值报 `a dialog is currently open` | 页面开了 `beforeunload` 之类的对话框，**其后命令全部失效**——先 `browser_dialog --action accept`（或 `dismiss`）处理，再重跑原命令（§3.4） |
+| 刷新／求值报 `a dialog is currently open` | 页面开了 `beforeunload` 之类的对话框，**其后命令全部失效**——先 `browser_dialog --action accept`（或 `dismiss`）处理，再重跑原命令。**该对话框不反映脏态**（未保存时弹、已保存后同样弹），别拿它推断「存上没有」——保存后回读一律**另开标签重载**（§3.4） |
 | 上传控件无法赋值 | 见 §3.4「上传处置」——试探不通过就请使用者手动上传，不擅自换通道顶替 |
 
 ### 6.3 包内机械校验（每轮跑运行态档；改封装体跑封装体档）

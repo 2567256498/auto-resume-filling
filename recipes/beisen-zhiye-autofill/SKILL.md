@@ -53,7 +53,7 @@ description: 北森招聘平台 zhiye.com 系（`<租户>.zhiye.com`，自研 Ph
 - **月份面板**（教育／实习／项目的开始-结束时间）：`.phoenix-calendar-month-panel` + `.phoenix-calendar-month-panel-month`；年份用 `.phoenix-calendar-month-panel-year-select` 或 `.phoenix-calendar-prev-year-btn` 逐年回退（≤10 次可行，约 0.2s/次）
 - 年面板陷阱：**首次打开直接点年会关掉整个面板**（点到旧实例）→ 先点 `.phoenix-calendar-year-panel-prev-decade-btn` 翻十年代触发重渲染，再点目标年格
 - 每步之前先清场（`document.body` 派发 mousedown/mouseup/click）：残留弹层会让「取最后一个可见层」取错
-- **（本通道实测首选）年月控件直接写值，不要走弹出面板**：点开只把 React 外层 `visible` 置真，内层 popup 恒 `display:none`、`.phoenix-calendar` 不挂载，此后每次点击都变成「关闭」；调 `onVisibleChange(false)` 复位、甚至重载页面都开不出来。可靠办法＝沿该字段 input 的 `__reactInternalInstance$` 找**带 `format`（含 `YYYY`）且 `onChange` 是函数**的那层，调 `onChange('2025/09','2025/09')` 直接落值。**值在 props 层是字符串且为斜杠式**（年月 `YYYY/MM`、日级 `YYYY/MM/DD`；input 上显示的才是连字符式），由同页已填字段的 props 反证。六个年月字段（教育起止、实习 4 段起止、校园 2 条起止）全部由此写入并重载留存（2026-09-17 实测）。写日期前先用**同页已填同类字段**确认值类型与格式，不要假设是 moment 对象
+- **（本通道实测首选）年月控件直接写值，不要走弹出面板**：点开只把 React 外层 `visible` 置真，内层 popup 恒 `display:none`、`.phoenix-calendar` 不挂载，此后每次点击都变成「关闭」；调 `onVisibleChange(false)` 复位、甚至重载页面都开不出来。可靠办法＝沿该字段 input 的 `__reactInternalInstance$` 找**带 `format`（含 `YYYY`）且 `onChange` 是函数**的那层，调 `onChange('2025/09','2025/09')` 直接落值。**值在 props 层是字符串且为斜杠式**（年月 `YYYY/MM`、日级 `YYYY/MM/DD`；input 上显示的才是连字符式），由同页已填字段的 props 反证。六个年月字段（教育起止、实习 4 段起止、校园 2 条起止）全部由此写入并重载留存（2026-09-17 实测）。写日期前先用**同页已填同类字段**确认值类型与格式，不要假设是 moment 对象；**格式还随站点／组件版本而异**——2026-09-17 实测的站点为斜杠式 `YYYY/MM`，2026-09-24 实测的站点为**连字符式** `YYYY-MM-DD` 且要写在**带 `dateTimeType` 属性**的层上，错格式**不报错**、直接把值**清空**（见 §10）
 
 ## 6 文本与字数
 - 输入框／文本域：**交付一律走真实键入**（`browser_input_text`，秒回、中文无损）——本平台实测合成写入不落库。React 原型 setter ＋ `InputEvent('input',{inputType:'insertText',data})` ＋ `change` **只作侦察／临时草稿，不得作交付手段**。写完立即回读，判据是**保存后整页回读**（真重载用 `browser_go_to_url`；`browser_tab_reload` 实测是空操作）。本平台属手册 §3.7.5 的「默认走真实输入」，例外三类参见该条。
@@ -79,10 +79,22 @@ description: 北森招聘平台 zhiye.com 系（`<租户>.zhiye.com`，自研 Ph
 - **上传做不到**：本通道无法写 `input[type=file]`（`fill` 后 `value` 空、`files.length=0`），附件一律请使用者手动上传。
 - **保存与重载**：JS 点「暂存」按钮可行；验证务必用 `browser_go_to_url` 重新导航。导航会触发 `beforeunload` 对话框挡住后续命令，先用 `browser_dialog --action accept` 放行。（2026-09-19 补：对话框不处理时，**其后任何命令都整体失效**，不只是求值——见手册 §3.4）
 
+## 10 岗位投递表单·另一站点补充（2026-09-24 实测·**首见待验**，达门槛后并入上文各节）
+
+- 作业页与 §9 同形：`<租户>.zhiye.com/form?fromPage=job&jobAdId=…&userId=…`，底部按钮 `暂存`／`取消`／`预览并提交`；本页 164 个 `.form-item`
+- **日期控件写法（本轮试错定论）**：点面板不可行（同 §5，内层 popup 不挂载）。沿该字段 input 的 `__reactInternalInstance$` **逐层**找**带 `dateTimeType` 属性**的组件层，调 `mp.onChange('YYYY-MM-DD')`。**格式随站点／组件版本而异**——本站连字符式 `2019-06-01` 命中，而斜杠式 `2019/06/01`（另一站点的格式）与对象式 `{value:'…'}` **都被静默清空**（不报错、回读才发现）。**别假设格式**：先按「层深 × 候选格式」扫一遍，命中的那组再批量用
+- **普通下拉写法**：`browser_get_dropdown_options` 在本通道恒返回 `No options found in any frame`，面板点选也不可靠。可靠办法＝沿 `.phoenix-select` 内 input 的 fiber 逐层找到 `memoizedProps.options` 为数组的那层（本站为**第 16 层**），在数组里按 `label` 命中后调 `mp.onChange(hit)`（`hit` 即该数组元素，形如 `{label:'雅思',value:100996}`）；写完回读该层 `value` 确认
+- **条目顺序由服务端按起始时间倒序重排**：本站**没有排序控件**（每条只有「删除」），DOM 里新增的条目只追加在末尾；但**暂存后重载，服务端返回的是起始时间倒序**。**页内顺序 ≠ 保存后顺序**，不必为「最新在前」另想绕法
+- **保存按钮必须真实点击**：`browser_click_element` 对「暂存」走 `encodedId JS fallback` 时**返回成功、页面无任何报错，但服务端数据未变**（首存即由此静默失败）；改用 `find_and_act --by text --value "暂存" --action click --exact` 后保存成功。**判据只能是服务端重载回读**（§3.4、§6.2）
+- **`beforeunload` 不是脏态判据**：本站表单**恒挂** `beforeunload`（另开一个从未编辑过的同 URL 标签页，导航时同样弹确认框）；反之真正未保存时也没有更强的提示。**不要用它推断「存上没有」**。由此，「保存后刷新回读」要**另开标签重载**（`browser_tab_open --sessionId <id> --url <同一 URL>`）——本标签内的导航会被拦下；新标签不一定是命令落点，用 `performance.timeOrigin` 分辨（`performance.now()` 数字大的是留在身后的旧标签，数据也是旧的）。机制见手册 §3.4
+- 本站结构（与 §9 不同）：获奖区块字段为 获奖时间／奖项名称／获奖级别／颁奖单位／其他补充／担当角色，**没有「奖项类型」字段**（§9 那句是站点差异，不是平台事实）；教育经历**要求填到高中**（页内说明「请从最高学历填写，填写至高中」）；工作经历描述上限 **2000**、自我评价 **32766**；语言能力为 外语语种＋语言等级＋得分 三件套（等级选项含 托福／雅思／全国大学英语六级…）
+- **地区类多选字段本站正常回填**：`phoenix-select--multi` 字段写入后暂存、重载，该栏仍有值，根 `.phoenix-select` 类名含 `phoenix-select--exsitMultiValue`——**回填与否按站点而异**，一律以重载回读为准（§9 那句仅对第一站点成立）
+- **回读要读组件状态，不能只读 `input.value`**：本站自绘多选／日期类字段是 `div`、没有 input，按 `input.value` 扫会把「明明有值」的字段报成空，进而误判「必填未填」；组件型字段看渲染文本或组件层 `value`（§1、§7）
+- 已复现的既有手法（沿用，不重复记）：真实键入并在保存后整页回读（§6）、新增条目后整页回读（§2）、保存前扫必填（§7）
 ## 9 岗位投递表单（`zhiye.com/form?fromPage=job&jobAdId=…`）补充（2026-09-19 实测·**首见待验**，达门槛后并入上文各节）
 
 - 作业页是**岗位投递表单**，底部按钮为**「暂存」＋「预览并提交」**（与简历编辑页的「保存」不同）；保存接口 `POST /api/Submission/TempSave`，成功体 `{"Code":200,"Message":"operation success","Data":"<草稿id>"}`，重复暂存 `Data` 不变——可作草稿同一性判据
-- **地区类字段有多选形态**（「意向工作地点」可多选，与 §3 的单选面板不同）：面板内逐行 `onChangeCheck`／`onClickLabel` 与面板「确定」的 `onSubmit([data])` **都只改显示、不落库**；可行写法＝沿 `.phoenix-select` 的 `__reactInternalInstance$` 向上找到 `value` 为**数组**且带 `onChange` 的层，调 `onChange([{id:'1100',label:'北京市'}])`——此后暂存请求体出现 `WorkPlace={"text":"北京市","value":"1100"}`。**但该字段服务端不回填**：刷新后表单仍为空（两次复现），提交前须现场确认
+- **地区类字段有多选形态**（「意向工作地点」可多选，与 §3 的单选面板不同）：面板内逐行 `onChangeCheck`／`onClickLabel` 与面板「确定」的 `onSubmit([data])` **都只改显示、不落库**；可行写法＝沿 `.phoenix-select` 的 `__reactInternalInstance$` 向上找到 `value` 为**数组**且带 `onChange` 的层，调 `onChange([{id:'1100',label:'北京市'}])`——此后暂存请求体出现 `WorkPlace={"text":"北京市","value":"1100"}`。**但该字段服务端不回填**：刷新后表单仍为空（两次复现），提交前须现场确认。**（2026-09-24 更正）「服务端不回填」是站点差异、不是平台事实**——另一站点同型字段（`phoenix-select--multi`）重载后仍有值，见 §10
 - 页面带 `beforeunload` 拦截：重载／求值前先 `browser_dialog --action accept`（手册 §3.4、§6.2）
 - 本站结构事实：获奖区块「奖项类型」**只有 奖学金／竞赛**，无荣誉称号类目（荣誉称号类硬填即错填）；「竞赛名称」带星标必填，奖学金类按不适用填 `-`；教育经历**无高中层级**（页内说明「自大学以来的教育经历填起」）
 - 已复现的既有手法（沿用，不重复记）：单选地区面板 `onChangeCheck` ＋ `onClickLabel`（户口所在地）、年月／日期写入（§5）、真实键入（§6）、新增条目后整页回读（§2）
