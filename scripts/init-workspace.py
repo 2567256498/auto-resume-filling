@@ -9,6 +9,10 @@
                                                           # 清空 .workbuddy/tmp/（每轮收尾跑）
   python scripts/init-workspace.py --check --cli "<CLI 绝对路径>"
                                                           # 通道探测时显式指定 CLI（可选）
+  python scripts/init-workspace.py --check --record-trace --project "<项目根>"
+                                                          # 体检＋留痕：把本次体检结果追加记入
+                                                          # .workbuddy/evidence/deploy-check.log
+                                                          # （校验器第十段查这份留痕，§4.1 第 0 步）
   python scripts/init-workspace.py --yes \\
       --project "<项目根目录>" \\
       --ledger  "<台账文件路径>" \\
@@ -484,6 +488,7 @@ def main():
     force = "--force" in argv
     mode_clean = "--clean-tmp" in argv
     mode_make = "--make-launcher" in argv
+    record_trace = "--record-trace" in argv
 
     def opt(name, default=None):
         if name in argv:
@@ -622,6 +627,21 @@ def main():
         ch = {"ok": "已就位", "warn": "判据未过", "miss": "未就位"}[pc["state"]]
         print("缺失 %d 项 / 共 %d 项必检（另 %d 项可选）；通道侧：%s；退出码：%d"
               % (miss, len(checks), len(optional), ch, 1 if miss else 0))
+        if record_trace:
+            # 开工体检留痕（v3.1.2 补）：把本次体检结果追加记入 evidence/，机械校验第十段
+            # 据此判「开工体检已跑」（§〇.7／§4.1）。不带本参数时 --check 仍是纯只读。
+            tdir = Path(cfg["project_dir"]) / ".workbuddy" / "evidence"
+            tpath = tdir / "deploy-check.log"
+            try:
+                tdir.mkdir(parents=True, exist_ok=True)
+                with io.open(str(tpath), "a", encoding="utf-8", newline="\n") as f:
+                    f.write("%s | %s | miss=%d/%d | channel=%s\n"
+                            % (datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), version,
+                               miss, len(checks), pc["state"]))
+                print("  OK    开工体检留痕已记：%s" % tpath)
+            except OSError as e:
+                print("FAIL 留痕写入失败 %s：%s" % (tpath, e))
+                return 1
         return 1 if miss else 0
 
     # ── 生成 ────────────────────────────────────────────────────────

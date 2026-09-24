@@ -48,6 +48,7 @@ import os
 import re
 import sys
 import zipfile
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -684,6 +685,42 @@ def _mech_weight_hint(s, rounds):
     return ["机制运行证据：连续 ≥3 轮无事件（触发一次「是否过重」复核，提示非阻断）"]
 
 
+def _check_trace(led):
+    """第十段附：开工体检留痕（v3.1.2 补）。§〇.7 要求每次开工先跑
+    ``--check --record-trace``，留痕追加在 <项目根>/.workbuddy/evidence/deploy-check.log；
+    本判据把「体检跑没跑靠人记」升级为「有痕迹可查」。台账不在标准布局
+    （<根>/.workbuddy/skills/）时跳过——定位不了项目根，宁可不判也不误报。"""
+    out = []
+    p = Path(led).resolve()
+    if not (p.parent.name == "skills" and p.parent.parent.name == ".workbuddy"):
+        out.append("开工体检留痕：跳过（台账不在标准布局，定位不了项目根）")
+        return out
+    t = p.parent.parent / "evidence" / "deploy-check.log"
+    if not t.is_file():
+        fail(10, "开工体检留痕缺失——每个任务开工第 0 步应先跑 "
+                 "init-workspace.py --check --record-trace --project \"<项目根>\"，"
+                 "留痕会追加到 .workbuddy/evidence/deploy-check.log；跑一次即生成（§4.1／§6.1）")
+        out.append("开工体检留痕：缺失")
+        return out
+    lns = [l for l in read_utf8(t).splitlines() if l.strip()]
+    last = lns[-1].strip() if lns else ""
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})", last)
+    if not m:
+        fail(10, "开工体检留痕末行不可解析（应为「<ISO时刻> | <包版本> | miss=x/5 | channel=…」，"
+                 "由 --check --record-trace 写入）→ %r" % last[:80])
+        out.append("开工体检留痕：末行不可解析")
+        return out
+    out.append("开工体检留痕：末次 %s %s（共 %d 行）" % (m.group(1), m.group(2), len(lns)))
+    try:
+        d = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        if (date.today() - d).days > 7:
+            warn(10, "开工体检留痕末次 %s（>7 天）——环境久未复检或留痕停记；"
+                     "开工前补跑一次 --check --record-trace" % m.group(1))
+    except ValueError:
+        pass
+    return out
+
+
 def check_ledger(led, apply_xlsx):
     """第十段：运行态台账校验。返回打印用信息行。"""
     s = read_utf8(led)
@@ -871,6 +908,7 @@ def check_ledger(led, apply_xlsx):
             info.append("投递记录：序号 1–%d（%d 行）｜锚定 %d ｜未复核轮 %d %s" % (
                 mx, len(seqs), len(anchor_seqs & set(seqs)), len(unreviewed),
                 ("[" + ", ".join(str(x) for x in unreviewed[:8]) + ("…" if len(unreviewed) > 8 else "") + "]") if unreviewed else ""))
+    info.extend(_check_trace(led))
     info.extend(check_registry(led))
     if not light:
         info.extend(_mech_weight_hint(s, rounds))
