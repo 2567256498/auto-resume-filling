@@ -7,8 +7,8 @@ including the Linux port work in [PR #234](https://github.com/citrolabs/ego-lite
 
 | Vendored component | Source | License |
 |---|---|---|
-| `runtime/ego-browser/dist/out/index.js` | shared ego-browser harness build (`package/ego-browser`) | MIT |
-| `runtime/ego-linux/*` | Linux CDP host (`package/ego-linux`, PR #234) + local proxy patch | MIT |
+| `ego-browser/dist/out/index.js` | shared ego-browser harness build (`package/ego-browser`) | MIT |
+| `ego-browser/runtime/ego-linux/*` | Linux CDP host (`package/ego-linux`, PR #234) + local proxy patch | MIT |
 | `runtime/skills/ego-browser/*` | agent skill package (`skills/ego-browser`) | MIT |
 | BtbN FFmpeg builds (optional download) | https://github.com/BtbN/FFmpeg-Builds | GPL-3.0-or-later for the selected GPL build |
 | `ffmpeg-static` macOS release assets (optional download) | https://github.com/eugeneware/ffmpeg-static | GPL-3.0-or-later; upstream binaries originate from Evermeet/OSXExperts |
@@ -32,7 +32,7 @@ build, preserve notices, and provide corresponding source as required. Sources:
 Using a user-supplied FFmpeg binary may carry different licensing obligations;
 the user/distributor is responsible for the selected build.
 
-Additional local modifications on top of upstream (see `runtime/ego-linux/src/chrome.mjs`):
+Additional local modifications on top of upstream (see `ego-browser/runtime/ego-linux/src/chrome.mjs`):
 - `EGO_LINUX_PROXY` support: injects `--proxy-server` / `--proxy-bypass-list` into the
   launched Chrome, so the agent browser can reach the network through a local proxy
   without hijacking the CLI's own loopback CDP traffic.

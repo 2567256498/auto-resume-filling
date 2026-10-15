@@ -29,9 +29,9 @@ python scripts/probe-browser.py --json   # 机器可读形态
 | # | 要什么 | 判据（只读） | 不过时怎么办 |
 |---|---|---|---|
 | ① | Node ≥ 22 能解析 | `node --version` 主版本 ≥22 | 装 LTS（nodejs.org）或把 node.exe 加入 PATH；**本包不打包 Node**——ego 客户端体量小，打包会白占几十 MB 且版本老化快，探测链已覆盖常见安装位置 |
-| ② | ego 实例在运行 | `%LOCALAPPDATA%\ego-lite-linux\browser.json` 存在且其 CDP 端口探得通 | 双击 `launch-browser.bat`（调包内 `runtime/ego-browser.cmd --open`）启动，**保持窗口不关**；命令「能跑」不等于实例在跑 |
+| ② | ego 实例在运行 | `%LOCALAPPDATA%\ego-lite-linux\browser.json` 存在且其 CDP 端口探得通 | 双击 `launch-browser.bat`（调包内 `ego-browser/ego-browser.cmd --open`）启动，**保持窗口不关**；命令「能跑」不等于实例在跑 |
 | ③ | 系统浏览器本体在 | Chrome 或 Edge 可执行文件在常见安装位（探测链与 ego 运行时 `chrome.mjs` 的候选链同序） | Windows 一般自带 Edge；都没有就装一个（Chrome／Edge 官网）。**本包不打包浏览器二进制**：设计逻辑见下 |
-| ④ | ego 专用 profile 在 | `<profile>` 目录存在（登录态数据在其 `Default` 子目录） | 首次启动后是空的——打开各招聘网站登录一次；或 `runtime/ego-browser.cmd --import-chrome-profile` 从真实 Chrome 继承登录态 |
+| ④ | ego 专用 profile 在 | `<profile>` 目录存在（登录态数据在其 `Default` 子目录） | 首次启动后是空的——打开各招聘网站登录一次；或 `ego-browser/ego-browser.cmd --import-chrome-profile` 从真实 Chrome 继承登录态 |
 
 **为什么浏览器本体不打包进包**（三条，都是取舍而非偷懒）：
 
@@ -45,13 +45,13 @@ python scripts/probe-browser.py --json   # 机器可读形态
 
 | # | 配置项 | 说明 | 取值（移交时填一次） |
 |---|---|---|---|
-| 1 | ego 客户端 | 驱动浏览器的 CLI 与运行时 | **包内 `runtime/ego-browser.cmd`**（随包分发，无需外部安装）；换实现＝换 §三 整节（§1.3） |
+| 1 | ego 客户端 | 驱动浏览器的 CLI 与运行时 | **包内 `ego-browser/ego-browser.cmd`**（随包分发，无需外部安装）；换实现＝换 §三 整节（§1.3） |
 | 2 | 使用者要求文件（**可选**） | 使用者自己的更高优先要求 | 路径由使用者提供（项目级／使用者级均可）。**只读、不镜像**：冲突时以它为准并报使用者，裁定后修正本手册；无则本手册独立生效（§1.4） |
 | 3 | 数据层·**单文件**（取值） | 权威取值来源，**必须存在**，且必须**点名到一个文件**（不是目录） | 使用者的资料库**主文件**（一份 Markdown，同时承载事实与定稿文本、各系统字段取值、附件与照片路径、成绩明细）。**写成目录级即构成双真源**——主数据与字段映射会各成一份，而两份不一致时两边都不会报错（源环境实测发生过：按目录生成骨架后，环境里并存两份数据层）。**本项一律写文件的绝对路径**；此处**不举文件名示例**，举例会被照抄成骨架文件名。写库走“先列单确认”（§5.2）。**新环境由 §1.5 生成骨架**（只建结构、不填内容）。**默认形态＝单个 Markdown 文件**（2026-09-23 裁定维持；改用 JSON 也须是单文件、并在此注明）。**数据层所在目录即信息目录**（2026-09-23 补）：投递台账、其余信息文件与附件原件同置该目录，**项目根只留要求文件与启动器**——信息文件散落根目录会让「哪一份才是数据层」重新变含糊；引用一律写该目录下的绝对路径 |
 | 4 | 配方目录 | **二选一，且同一环境同名配方只能存在一份**：① **就地引用**（默认）＝包内 `recipes/`；② 复制到 `<配方根目录>/<名>-autofill/SKILL.md` | **两条路不能同时走**——包内 `recipes/*/SKILL.md` 在多数环境里会被技能扫描器直接注册成技能（源环境实测：配方全部在册、可直接读），再复制一份即出现**同名技能两份**、行为不可预期。选 ① 时，本项目对某配方的增补就写回包内那一份（去个人化由 §6.3 第⑦⑧段机械拦）；选 ② 时，包内那一份随之停用、不再作为来源。新系统配方按 §4.3 在**生效的那一处**新建 |
 | 5 | 证据台账 | 经验台账与变更档案 | 路径由使用者提供（**不随包**）；**新环境由 §1.5 按 §5.1 模板直接生成** |
 | 6 | 禁止触碰 | 本任务范围外的目录／文件（如与他人或其他通道共用的资产） | 按目标的边界填写；没有则留空 |
-| 7 | 浏览器启动方式 | ego 客户端与启动器 | **包内 `launch-browser.bat`**（调 `runtime/ego-browser.cmd --open`）。机制、profile 继承、静默补丁见 §三 |
+| 7 | 浏览器启动方式 | ego 客户端与启动器 | **包内 `launch-browser.bat`**（调 `ego-browser/ego-browser.cmd --open`）。机制、profile 继承、静默补丁见 §三 |
 
 **取数唯一真源**：配置项 3。快照、记忆、上一轮读数、页面现状**一律不算**。
 
@@ -70,7 +70,7 @@ python scripts/probe-browser.py --json   # 机器可读形态
 | `drivers/` 三个脚本 | **随行**——`silent-driver.mjs`（后台静默操作）、`ego-cdp-driver.mjs`（任务空间外标签页的 CDP 驱动）、`patch-ego-silent.mjs`（ego 运行时静默补丁，幂等；插件或运行时更新后重跑一次即可恢复） |
 | §2.1 行为红线、§2.2 内容填报口径、§三 通道规范（同通道时）、§四 流程与分层、§五 闭环、§六 自检与失败模式、§4.6–§4.7 判据对照与配方索引 | **通用，直接可用** |
 | `recipes/` 全部配方 | **随行**——按 §1.1 配置项 4**二选一**：**就地引用**本包这一份（默认），或复制到环境侧目录。**同一环境同名配方只能存在一份**；就地引用时增补写回本包这一份，复制时本包这一份随之停用。内容分两类：**页面层手法**（页面内执行的脚本）跨通道通用，**可直接用**；只有依赖通道动作的三种步骤（真实点击／语义定位与 snapshot 索引／iframe 穿透）按【未复现】对待，能兜底的已写兜底；验到的结论就地在**生效的那一处配方**内回写（§5.3 第 5 条）；走复制路线时再同步进包。**配方自带的 `scripts/` 一并随行**——如 `feishu-atsx-autofill` 的 9 个文件（8 个页面脚本 ＋ 1 个 ego 运行器），清单与占位符约定写在该配方末节 |
-| `scripts/launch-browser.bat` | **随行**——浏览器启动器；直接可用（调包内 `runtime/ego-browser.cmd --open`） |
+| `scripts/launch-browser.bat` | **随行**——浏览器启动器；直接可用（调包内 `ego-browser/ego-browser.cmd --open`） |
 | `scripts/probe-browser.py` | **随行**——前置四段探测（§1.0）；只用标准库 |
 | `scripts/verify-package.py` | **随行**——包内机械校验，**两档**（§6.3）：**每轮档（默认）**＝运行态第十段 ＋ 模板自证；**封装体档**（`--package`）＝九段全跑 ＋ 运行态，改过封装体时才需要。每轮收尾必跑，退出码 0 才算完；**使用者环境的收尾校验也用它**（带 `--ledger` 指向本环境台账，生成的项目级要求文件 §七 即如此指向） |
 | `scripts/init-workspace.py` ＋ `templates/` | **随行**——首次部署初始化（§1.5）：生成项目级要求文件、台账、变更档案、数据层骨架 |
@@ -156,11 +156,11 @@ python scripts/init-workspace.py --project "<项目根目录>"          # 生成
 ## 三、ego 浏览器通道规范
 
 > **定位**：ego 浏览器怎么连、怎么核对落点、脚本有什么坑、坏了怎么处置。本手册 §二 是它在要求面上的硬性条目，本章是它的操作细则层。**效力**：§二 ＞ 本章 ＞ 各配方。冲突时按 §二。
-> **正文工具名**：本章沿用 DSH 侧的结构化工具名（`ego_script`／`ego_page_info` 等）。**没有这些结构化工具的环境**（如 WorkBuddy 侧），一律按下方映射表执行——脚本通过 `runtime/ego-browser.cmd < 脚本文件` 运行（JS 走 stdin），脚本内用 `page`／`browser`／`taskSpaces`／`cdp` 门面：
+> **正文工具名**：本章沿用 DSH 侧的结构化工具名（`ego_script`／`ego_page_info` 等）。**没有这些结构化工具的环境**（如 WorkBuddy 侧），一律按下方映射表执行——脚本通过 `ego-browser/ego-browser.cmd < 脚本文件` 运行（JS 走 stdin），脚本内用 `page`／`browser`／`taskSpaces`／`cdp` 门面：
 
 | 正文中的工具 | 无结构化工具时的等价执行方式 |
 |---|---|
-| `ego_script` | 跑 `runtime/ego-browser.cmd < 脚本文件`，JS 走 stdin |
+| `ego_script` | 跑 `ego-browser/ego-browser.cmd < 脚本文件`，JS 走 stdin |
 | `ego_page_info` | 脚本内 `await browser.currentTab()`（含 url／title／targetId） |
 | `ego_click` | 脚本内 `await page.locator(选择器).click()`，或用 `page.getByLabel()`／`getByRole()`／`getByText()` |
 | `ego_fill` | 脚本内 `await page.locator(选择器).fill(值)` |
@@ -221,7 +221,7 @@ python scripts/init-workspace.py --project "<项目根目录>"          # 生成
 - **空白页**：页面丢失／变 `about:blank` 时只报告、不自行重开（重开会顶掉用户页面、丢掉未保存内容）；用户当场同意后才可用无参方式重开该已知表单 URL（仅限用户给过的明确 URL），重开后需登录则等用户登录完成再继续。
 - **`beforeunload` 原生确认框会锁死渲染进程（两次实测）**：症状＝`Runtime.evaluate`（连 `1+1`）与 `Debugger.*`／`Page.enable` 全部 CDP 超时，而浏览器级命令（`Target.getTargets`／`Page.getNavigationHistory`）正常，极易误判成「渲染进程崩溃」；`Page.handleJavaScriptDialog`／`ego_dialog` 回「No dialog is showing」——Page 域须在弹框**之前**启用，事后接入的会话看不到。沙箱下三条兜底都到不了该框：UIA 从 RootElement 查 `Button` 得 0 个、`CopyFromScreen` 出空帧、`SetForegroundWindow`＋`SendKeys`／`mouse_event` 返回成功但不响应 → **唯一出路是请用户点**。**确需刷新时先在页面内抑制再导航**（实测有效）：`Object.defineProperty(BeforeUnloadEvent.prototype,'returnValue',{get:function(){return '';},set:function(v){},configurable:true})` ＋ 覆盖 `Event.prototype.preventDefault`（对 `beforeunload` 直接 return）＋ `window.onbeforeunload=null`，随后 `Page.reload` 不再弹框、渲染进程不被锁；抑制只在页面存活期内有效，刷新后需重新施加。
 - **黑屏／灰屏**：属渲染问题（Windows `CalculateNativeWinOcclusion` 遮挡误判停止渲染），与已保存数据无关，重载页面即可恢复。与空白页是**两种故障**，勿混淆。本机可把 `--disable-features=CalculateNativeWinOcclusion` 写进启动参数（ego 插件的「Chrome 启动附加参数」设置项，升级不丢）。
-- **ego 运行时静默补丁（插件／运行时更新后会还原，必须重跑）**：ego 运行时默认行为会把 Chrome 窗口提到前台（`Target.activateTarget`／`Page.bringToFront`／新建 target 带 focus）。补丁 `drivers/patch-ego-silent.mjs` 一次打完 6 处（`src/tabs.mjs` 与 `src/task-spaces.mjs` 的 `Target.createTarget` 各加 `focus:false`；`src/transport.mjs` 的 `sendRaw()`／`call()` 拦掉抬窗命令并**代答成功应答**（只丢弃会让上层等回包超时）；`src/window-fit.mjs` 两处 `Browser.setWindowBounds` 去掉 `windowState:'normal'`）。**用法**：`node drivers/patch-ego-silent.mjs [runtimeRoot]`——runtimeRoot 缺省打 DSH 插件目录（`%USERPROFILE%\.dsh\profiles\web\node_modules\dsh-ego-browser\runtime\ego-linux`），打本包内置副本时传 `runtime/ego-linux`；脚本幂等（已打过报 `already`）、改前自动备份到 `<包>/backups/ego-silent-patch/`、改完自检语法。**升级 ego 后必须重跑并复核**：验证方式＝读 `GetForegroundWindow()` 标题 → 连做 `browser.switchTab(当前页)` ＋ 两三个 ego_* 调用 → 再读标题，必须一字不变且 `switchTab` 不报超时。
+- **ego 运行时静默补丁（插件／运行时更新后会还原，必须重跑）**：ego 运行时默认行为会把 Chrome 窗口提到前台（`Target.activateTarget`／`Page.bringToFront`／新建 target 带 focus）。补丁 `drivers/patch-ego-silent.mjs` 一次打完 6 处（`src/tabs.mjs` 与 `src/task-spaces.mjs` 的 `Target.createTarget` 各加 `focus:false`；`src/transport.mjs` 的 `sendRaw()`／`call()` 拦掉抬窗命令并**代答成功应答**（只丢弃会让上层等回包超时）；`src/window-fit.mjs` 两处 `Browser.setWindowBounds` 去掉 `windowState:'normal'`）。**用法**：`node drivers/patch-ego-silent.mjs [runtimeRoot]`——runtimeRoot 缺省打 DSH 插件目录（`%USERPROFILE%\.dsh\profiles\web\node_modules\dsh-ego-browser\ego-browser\runtime\ego-linux`），打本包内置副本时传 `ego-browser/runtime/ego-linux`；脚本幂等（已打过报 `already`）、改前自动备份到 `<包>/backups/ego-silent-patch/`、改完自检语法。**升级 ego 后必须重跑并复核**：验证方式＝读 `GetForegroundWindow()` 标题 → 连做 `browser.switchTab(当前页)` ＋ 两三个 ego_* 调用 → 再读标题，必须一字不变且 `switchTab` 不报超时。
 
 ### 3.6 上传
 

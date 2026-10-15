@@ -9,7 +9,7 @@ description: 国家能源集团招聘系统（zhaopin.chnenergy.com.cn）在线�
 
 > 适用：`zhaopin.chnenergy.com.cn` 在线简历（`/resume/editResume?type=1`）。
 > 来源：2026-09-20 国家能源集团校招在线简历填写（投递台账序号 49 锚点轮，本项目 r8）。
-> 字段取值与口径见 `简历信息库/表单字段映射.json` → `system_fields` 的「国家能源集团」条目。
+> 字段取值与口径见 `数据层（项目要求文件 §〇.1 点名的单文件）` → `system_fields` 的「国家能源集团」条目。
 
 ## 0 页面态与入口
 
@@ -74,7 +74,7 @@ s.dispatchEvent(new Event('change', {bubbles:true}));
 - 流程：`#Kind` 过滤框输关键字 → `AutoMatchkind(k)` 检索 → `#treeKind` 里 zTree。
 - **点父节点会弹 alert「只能选择子节点」**，弹窗阻塞后续 eval；要展开父节点就点 `span.switch`，选中只能点叶子 `a`。
 - 选中后写进隐藏字段 `#kindName`（显示名）与 `#kingNode`（编码），再调 `subDicForm()` 提交回填。
-- 实测：专业「会计学」叶子 `kingNode=110203`，回填 `extfield1=会计学`、`major=110203`；硕士院校人大 `school=101002`。
+- 实测：专业「会计学」叶子 `kingNode=110203`，回填 `extfield1=会计学`、`major=110203`；硕士院校为联想点选（`school=` 学校 id，按候选取值）。
 
 ## 3 各区块表单与保存函数
 

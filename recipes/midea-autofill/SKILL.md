@@ -9,7 +9,7 @@ agent_created: true
 # 美的集团校园招聘官网简历填写配方
 
 > 适用：`https://careers.midea.com/schoolOut/resume`（美的集团校园招聘官网·创建/编辑简历页）。
-> 框架层无对应 skill（非 antd / 非 element-ui，是美的自研 `md-` 组件库）；本文件只写该系统专属实现。字段取值与口径在 `简历信息库/表单字段映射.json`。
+> 框架层无对应 skill（非 antd / 非 element-ui，是美的自研 `md-` 组件库）；本文件只写该系统专属实现。字段取值与口径在 `数据层（项目要求文件 §〇.1 点名的单文件）`。
 > 证据与复核记录：`.workbuddy/skills/EXPERIENCE-LEDGER.md`、`.workbuddy/skills/EXPERIENCE-CHANGELOG.md`。
 
 ## 1 识别判据

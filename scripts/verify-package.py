@@ -1044,7 +1044,7 @@ def main():
                               if l.strip() and not l.strip().upper().startswith("REM")
                               and not l.strip().startswith("::")]
                     code2 = "\n".join(code_l)
-                    if not re.search(r"runtime[\\/]ego-browser\.(cmd|mjs)", code2, re.I):
+                    if not re.search(r"ego-browser[\\/]ego-browser\.(cmd|mjs)", code2, re.I):
                         fail(5, "ego launcher does not reference vendored runtime/ego-browser client")
                     if not re.search(r"if\s+errorlevel\s+1", code2, re.I):
                         fail(5, "ego launcher lacks errorlevel check (client start failure must abort non-zero)")
@@ -1151,9 +1151,11 @@ def main():
         # ⑦⑧ 全包扫描（all_files 与配方目录已在 main 开头算好，两档共用）
         for p in sorted(all_files):
             rel = p.relative_to(ROOT).as_posix()
-            if p.relative_to(ROOT).parts[:1] == ('runtime',):
-                continue  # vendored third-party ego implementation;
-                # not scanned by this package doc standards.
+            _top = p.relative_to(ROOT).parts[:1]
+            if _top == ('ego-browser',) or _top == ('backups',):
+                # ego-browser/ = vendored third-party implementation (not scanned
+                # by this package doc standards); backups/ = local machine backups.
+                continue
             t = read_text(p)
             if t is None:
                 fail(9, "%s 编码无法解析" % rel)

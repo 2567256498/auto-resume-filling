@@ -7,7 +7,7 @@ description: 智联校招（xiaoyuan.zhaopin.com/scrd/resume2 等）系统专属
 > **通道状态（ego）**：页面层手法（页面内脚本）跨通道通用；依赖通道动作的步骤（真实点击／语义定位与 snapshot 索引／iframe 穿透）按「未在本通道跑过的只有三种动作」处理，按手册 §4.3 重验后就地回写。
 # 智联校招 · 系统专属配方
 
-定位：只写**智联独有**的实现细节。框架通用手法（setNative、el-select $emit、编辑器容器定位、日期按 label 上溯、弹层红线等）见 `webform-autofill`；字段取值与口径见 `简历信息库/表单字段映射.json`。
+定位：只写**智联独有**的实现细节。框架通用手法（setNative、el-select $emit、编辑器容器定位、日期按 label 上溯、弹层红线等）见 `webform-autofill`；字段取值与口径见 `数据层（项目要求文件 §〇.1 点名的单文件）`。
 
 ## 表单结构
 

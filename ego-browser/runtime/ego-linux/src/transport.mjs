@@ -243,6 +243,19 @@ export async function connectCdp(wsUrl) {
     sendRaw(payload) {
       assertOpen();
       noteActivation(payload);
+      // LOCAL PATCH (silent): drop window-raising commands authored by the harness, but answer
+      // the request ourselves so the harness does not sit on a timeout.
+      if (payload.includes("Target.activateTarget") || payload.includes("Page.bringToFront")) {
+        try {
+          const m = JSON.parse(payload);
+          if (m && m.id !== undefined) {
+            runtime?.onCDPMessage?.(JSON.stringify({ id: m.id, result: {} }));
+          }
+        } catch {
+          // Unparseable payload: there is no request to answer.
+        }
+        return;
+      }
       // [local patch 2026-09-23b] Answer Target.activateTarget without forwarding it: the harness tracks
       // its own current target (setPreferredTarget) and the shim mirrors it through
       // noteActivation above, so the activation itself buys nothing here except a
@@ -324,6 +337,10 @@ export async function connectCdp(wsUrl) {
       if (method === "Target.activateTarget" && params.targetId) {
         activeTargetId = params.targetId;
         // [local patch 2026-09-23b] Same reason as sendRaw — keep the hint, skip the window raise.
+        return Promise.resolve({});
+      }
+      // LOCAL PATCH (silent): call() also drops Page.bringToFront (the vendored 2026-09-23 form only dropped activateTarget).
+      if (method === "Page.bringToFront") {
         return Promise.resolve({});
       }
       const id = ++nextInternalId;

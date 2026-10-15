@@ -2,7 +2,7 @@
  * 本机补丁：让 ego 运行时全程静默（不抢焦点、不抬窗口）
  * 用途：插件升级/重装后重跑一次即可恢复（幂等）。
  * 用法：node drivers/patch-ego-silent.mjs [runtimeRoot]
- *   runtimeRoot 默认 = %USERPROFILE%\.dsh\profiles\web\node_modules\dsh-ego-browser\runtime\ego-linux
+ *   runtimeRoot 默认 = %USERPROFILE%\.dsh\profiles\web\node_modules\dsh-ego-browser\ego-browser\runtime\ego-linux
  * 改动 4 个文件：
  *   src/tabs.mjs        Target.createTarget 加 focus:false
  *   src/task-spaces.mjs Target.createTarget 加 focus:false
@@ -44,6 +44,12 @@ function patch(file, edits) {
       entry.already.push(e.name);
       continue;
     }
+    // altFinds: an older local-patch form may already cover this intent
+    // (vendored runtime ships the 2026-09-23 patch shapes); report already, don't double-apply.
+    if (e.altFinds && e.altFinds.some((f) => text.includes(f))) {
+      entry.already.push(e.name + ':older-form');
+      continue;
+    }
     if (!text.includes(e.find)) { entry.missing.push(e.name); continue; }
     if (text.split(e.find).length - 1 !== 1) { entry.missing.push(e.name + '(multiple)'); continue; }
     text = text.replace(e.find, e.replace);
@@ -59,6 +65,7 @@ function patch(file, edits) {
 
 patch('tabs.mjs', [{
   name: 'createTarget:focus-false',
+  altFinds: ['// [local patch 2026-09-23] focus:false', 'focus: false,'],
   mark: 'focus: false, // ' + MARK,
   find: 'const { targetId } = await cdp.call("Target.createTarget", {\n        url,\n        ...(browserContextId ? { browserContextId } : {}),\n      });',
   replace: 'const { targetId } = await cdp.call("Target.createTarget", {\n        url,\n        focus: false, // ' + MARK + ': never raise the OS window\n        ...(browserContextId ? { browserContextId } : {}),\n      });',
@@ -66,6 +73,7 @@ patch('tabs.mjs', [{
 
 patch('task-spaces.mjs', [{
   name: 'createTarget:focus-false',
+  altFinds: ['// [local patch 2026-09-23] Target.createTarget focuses', 'focus: false,'],
   mark: 'focus: false, // ' + MARK,
   find: '({ targetId } = await cdp.call("Target.createTarget", {\n          url: "about:blank",\n          ...(browserContextId ? { browserContextId } : {}),\n        }));',
   replace: '({ targetId } = await cdp.call("Target.createTarget", {\n          url: "about:blank",\n          focus: false, // ' + MARK + ': never raise the OS window\n          ...(browserContextId ? { browserContextId } : {}),\n        }));',
@@ -82,9 +90,19 @@ patch('transport.mjs', [
   },
   {
     name: 'call:drop-raise',
+    altFinds: ['// [local patch 2026-09-23b] Same reason as sendRaw'],
     mark: 'the hint above is recorded, the raise is not sent',
     find: '      if (method === "Target.activateTarget" && params.targetId) {\n        activeTargetId = params.targetId;\n      }\n      const id = ++nextInternalId;',
     replace: '      if (method === "Target.activateTarget" && params.targetId) {\n        activeTargetId = params.targetId;\n      }\n      // ' + MARK + ': the hint above is recorded, the raise is not sent.\n      if (method === "Target.activateTarget" || method === "Page.bringToFront") {\n        return Promise.resolve({});\n      }\n      const id = ++nextInternalId;',
+  },
+]);
+
+patch('transport.mjs', [
+  {
+    name: 'call:drop-bringToFront',
+    mark: 'call() also drops Page.bringToFront',
+    find: '      if (method === "Target.activateTarget" && params.targetId) {\n        activeTargetId = params.targetId;\n        // [local patch 2026-09-23b] Same reason as sendRaw — keep the hint, skip the window raise.\n        return Promise.resolve({});\n      }',
+    replace: '      if (method === "Target.activateTarget" && params.targetId) {\n        activeTargetId = params.targetId;\n        // [local patch 2026-09-23b] Same reason as sendRaw — keep the hint, skip the window raise.\n        return Promise.resolve({});\n      }\n      // ' + MARK + ': call() also drops Page.bringToFront (the vendored 2026-09-23 form only dropped activateTarget).\n      if (method === "Page.bringToFront") {\n        return Promise.resolve({});\n      }',
   },
 ]);
 

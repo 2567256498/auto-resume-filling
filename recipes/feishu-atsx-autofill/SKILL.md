@@ -127,7 +127,7 @@ el.blur();
 
 ## 七、随包脚本（scripts/，经 run_ego.py 驱动）
 
-`run_ego.py`＝本配方的 ego 通道运行器（接口：`python scripts/run_ego.py <JS 参数>` 或 `@cmdlist=<命令清单文件>`；CLI 探测链＝环境变量 `EGO_BROWSER` → 包内 `runtime/ego-browser.cmd` → PATH）。页面脚本都是纯页面内 IIFE，经 `page.evaluate()` 执行，占位符 `{{...}}` 由运行器替换：
+`run_ego.py`＝本配方的 ego 通道运行器（接口：`python scripts/run_ego.py <JS 参数>` 或 `@cmdlist=<命令清单文件>`；CLI 探测链＝环境变量 `EGO_BROWSER` → 包内 `ego-browser/ego-browser.cmd` → PATH）。页面脚本都是纯页面内 IIFE，经 `page.evaluate()` 执行，占位符 `{{...}}` 由运行器替换：
 
 | 脚本 | 占位符 | 用途 |
 |---|---|---|

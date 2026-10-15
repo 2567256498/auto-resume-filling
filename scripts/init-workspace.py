@@ -432,9 +432,9 @@ def make_launcher(project_dir, cli, force=False):
         print("FAIL 找不到模板 %s" % tpl)
         return 1
     tpl_text = tpl.read_text(encoding="ascii", errors="replace")
-    cli = cli or str(ROOT / "runtime" / "ego-browser.cmd")
+    cli = cli or str(ROOT / "ego-browser" / "ego-browser.cmd")
     if not Path(cli).is_file():
-        print("FAIL ego 客户端不可读：%s（包内应为 runtime/ego-browser.cmd；或用 --cli 指定）" % cli)
+        print("FAIL ego 客户端不可读：%s（包内应为 ego-browser/ego-browser.cmd；或用 --cli 指定）" % cli)
         return 1
     out = tpl_text.replace('set "HERE=%~dp0.."',
                            'set "HERE=%s"' % str(ROOT).replace(chr(92), "/"))

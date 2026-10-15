@@ -48,7 +48,7 @@ python scripts/probe-browser.py            # 退出码 0 = 可以开工
 
 # 3. 启动 ego 浏览器（双击 scripts/launch-browser.bat，窗口保持不关）
 #    首次 profile 是空的：打开各招聘网站登录一次；
-#    想继承日常 Chrome 的登录态：runtime\ego-browser.cmd --import-chrome-profile
+#    想继承日常 Chrome 的登录态：ego-browser\ego-browser.cmd --import-chrome-profile
 
 # 4. 初始化项目（--plan 先看清单，都不改文件）
 python scripts/init-workspace.py --plan  --project "<项目根>"

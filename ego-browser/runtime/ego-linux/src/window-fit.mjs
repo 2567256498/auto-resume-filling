@@ -43,7 +43,7 @@ export function createWindowFit(cdp) {
       const windowId = await windowFor(targetId);
       await cdp.call("Browser.setWindowBounds", {
         windowId,
-        bounds: { ...original, windowState: "normal" },
+        bounds: { ...original }, // LOCAL PATCH (silent): do not un-minimize / raise
       });
       original = null;
       applied = null;
@@ -90,8 +90,7 @@ export function createWindowFit(cdp) {
           windowId,
           bounds: {
             width: Math.round(width),
-            height: Math.round(height + CHROME_HEIGHT),
-            windowState: "normal",
+            height: Math.round(height + CHROME_HEIGHT), // LOCAL PATCH (silent): no windowState -> a minimized window stays minimized
           },
         });
         // Only now: a resize that failed has to be retryable, and marking it

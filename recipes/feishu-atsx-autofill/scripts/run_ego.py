@@ -1,7 +1,7 @@
 import subprocess, sys, base64, shlex, os, tempfile, shutil
 
 # ego 通道运行器（替代 QQ 浏览器时代的 run_cli.py，接口不变）。
-# CLI 探测链：环境变量 EGO_BROWSER -> 包内 runtime/ego-browser.cmd（相对本脚本定位）-> PATH。
+# CLI 探测链：环境变量 EGO_BROWSER -> 包内 ego-browser/ego-browser.cmd（相对本脚本定位）-> PATH。
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PKG_RUNTIME = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "runtime", "ego-browser.cmd"))
 CLI = (os.environ.get("EGO_BROWSER")
@@ -9,7 +9,7 @@ CLI = (os.environ.get("EGO_BROWSER")
        or shutil.which("ego-browser")
        or shutil.which("ego-browser.cmd"))
 if not CLI:
-    raise SystemExit("[run_ego] 未找到 ego-browser：设环境变量 EGO_BROWSER 指向它，或确认包内 runtime/ego-browser.cmd 在位")
+    raise SystemExit("[run_ego] 未找到 ego-browser：设环境变量 EGO_BROWSER 指向它，或确认包内 ego-browser/ego-browser.cmd 在位")
 OUT = os.path.join(tempfile.gettempdir(), "ego_cli_out.txt")
 
 def js_escape(v):

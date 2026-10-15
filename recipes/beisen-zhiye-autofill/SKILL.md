@@ -7,7 +7,7 @@ description: 北森招聘平台 zhiye.com 系（picc.zhiye.com、coamc.zhiye.com
 > **通道状态（ego）**：页面层手法（页面内脚本）跨通道通用；依赖通道动作的步骤（真实点击／语义定位与 snapshot 索引／iframe 穿透）按「未在本通道跑过的只有三种动作」处理，按手册 §4.3 重验后就地回写。
 # 北森 zhiye 网申填写配方（系统层）
 
-> 适用：北森招聘平台 zhiye.com 系（picc.zhiye.com、coamc.zhiye.com 等），前端为北森自研 Phoenix 组件（`phoenix-*`）。只写北森专属实现；字段取值与口径见 `简历信息库/表单字段映射.json`，跨框架通用手法见框架层 skill。
+> 适用：北森招聘平台 zhiye.com 系（picc.zhiye.com、coamc.zhiye.com 等），前端为北森自研 Phoenix 组件（`phoenix-*`）。只写北森专属实现；字段取值与口径见 `数据层（项目要求文件 §〇.1 点名的单文件）`，跨框架通用手法见框架层 skill。
 > 来源：2026-09-13 东方资产、中国人民保险两次网申实测（台账已复核）。
 
 ## 0 页面态与入口
@@ -103,7 +103,7 @@ description: 北森招聘平台 zhiye.com 系（picc.zhiye.com、coamc.zhiye.com
 ## [并入·DSH 侧 2026-10-05] 8 非 Phoenix 变体（老版 Portal 模板：`.bs_deliver` ＋ `form_container`）
 
 > 已实测租户：zofund 中欧基金（2026-09-19）、itgholding 厦门国贸控股（2026-09-22）；本变体与 §一–§七 的 Phoenix 实现**完全不同**，先判形态再套手法。
-> 尚有 5 条单租户观察（孤儿遮罩、同 id `#commonWrap` 多实例、「继续添加」落视口外、`offsetParent` 对 fixed 返回 null、`_txt`＋hidden code 成对）只在 itgholding 见过一次，按台账规则留在 `.dsh/skills/EXPERIENCE-LEDGER.md` r21 行待验，复现后再并入本节。
+> 尚有 5 条单租户观察（孤儿遮罩、同 id `#commonWrap` 多实例、「继续添加」落视口外、`offsetParent` 对 fixed 返回 null、`_txt`＋hidden code 成对）只在 itgholding 见过一次，按台账规则留在所在项目的经验台账 r21 行待验，复现后再并入本节。
 
 - **形态判别**：URL 为 `/Portal/Resume/ResumeItem?stepId=…`；`body` 内含 `.bs_deliver`／`.form_container`／`li>label.label_required`；日期控件加载 `WdatePicker.js`；**完全没有 `phoenix-*` 选择器**。三步向导由顶部链接 `BSGlobal.navigate(stepId)` 切换（stepId=0 基本信息／1 个人履历／4 预览提交），全页只渲染当前 step 的区块
 - **每条目一个独立 `<form>`，空白模板恒存在**（`id=emptyFrom_N`，`display:none`）：模板与实例控件同名（如 `RecruitmentPortalEducation_SchoolName`、`RecruitmentPortalExperience_CompanyName`），序号定位一定打到模板 → 动手前先给「可见且值为空的那一个 form」打标记（如 `data-ego`），后续全部按标记定位

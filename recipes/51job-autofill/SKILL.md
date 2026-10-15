@@ -8,7 +8,7 @@ description: 前程无忧／应届生校招（xyz.51job.com FillInResume.aspx，
 # 前程无忧 / 应届生校招简历录入（51job）系统层配方
 
 > 适用：`xyz.51job.com/External/MyResume/FillInResume.aspx`（前程无忧校招、应届生求职网 `prd=campus.yingjiesheng.com`，ASP.NET WebForms）。
-> 框架层无对应 skill（非 antd / 非 element-ui）；本文件只写该系统专属实现。字段取值与口径在 `简历信息库/表单字段映射.json`。
+> 框架层无对应 skill（非 antd / 非 element-ui）；本文件只写该系统专属实现。字段取值与口径在 `数据层（项目要求文件 §〇.1 点名的单文件）`。
 > 证据与复核记录：`.workbuddy/skills/EXPERIENCE-LEDGER.md`、`.workbuddy/skills/EXPERIENCE-CHANGELOG.md`。
 
 ## 0 页面态与导航
